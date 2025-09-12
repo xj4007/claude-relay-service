@@ -693,6 +693,13 @@ class ClaudeRelayService {
         requestPath = customUrl.pathname
       }
 
+      // 为 instcopilot 供应商添加 beta=true 查询参数
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        const separator = requestPath.includes('?') ? '&' : '?'
+        requestPath += `${separator}beta=true`
+        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
+      }
+
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
@@ -710,7 +717,7 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.111 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
@@ -718,10 +725,13 @@ class ClaudeRelayService {
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
 
-      // 使用自定义的 betaHeader 或默认值
+      // 使用自定义的 betaHeader 或默认值，但如果是真实的 Claude Code 请求且已有 beta header，则不覆盖
       const betaHeader =
         requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
-      if (betaHeader) {
+      if (
+        betaHeader &&
+        !(isRealClaudeCode && (finalHeaders['anthropic-beta'] || finalHeaders['Anthropic-Beta']))
+      ) {
         options.headers['anthropic-beta'] = betaHeader
       }
 
@@ -934,10 +944,18 @@ class ClaudeRelayService {
     return new Promise((resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
 
+      // 为 instcopilot 供应商添加 beta=true 查询参数
+      let requestPath = url.pathname
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        const separator = requestPath.includes('?') ? '&' : '?'
+        requestPath += `${separator}beta=true`
+        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
+      }
+
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
-        path: url.pathname,
+        path: requestPath,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -951,17 +969,20 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.111 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
       logger.info(
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
-      // 使用自定义的 betaHeader 或默认值
+      // 使用自定义的 betaHeader 或默认值，但如果是真实的 Claude Code 请求且已有 beta header，则不覆盖
       const betaHeader =
         requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
-      if (betaHeader) {
+      if (
+        betaHeader &&
+        !(isRealClaudeCode && (finalHeaders['anthropic-beta'] || finalHeaders['Anthropic-Beta']))
+      ) {
         options.headers['anthropic-beta'] = betaHeader
       }
 
@@ -1474,10 +1495,25 @@ class ClaudeRelayService {
     proxyAgent,
     clientHeaders,
     responseStream,
-    requestOptions = {}
+    requestOptions = {},
+    accountId = null
   ) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
+
+      // 获取账户信息（如果有accountId）
+      let account = null
+      if (accountId) {
+        account = await claudeAccountService.getAccount(accountId)
+      }
+
+      // 为 instcopilot 供应商添加 beta=true 查询参数
+      let requestPath = url.pathname
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        const separator = requestPath.includes('?') ? '&' : '?'
+        requestPath += `${separator}beta=true`
+        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
+      }
 
       // 获取过滤后的客户端 headers
       const filteredHeaders = this._filterClientHeaders(clientHeaders)
@@ -1485,7 +1521,7 @@ class ClaudeRelayService {
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
-        path: url.pathname,
+        path: requestPath,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -19,9 +19,11 @@ class ClaudeCodeHeadersService {
       'x-stainless-runtime-version': 'v20.19.2',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
-      'user-agent': 'claude-cli/1.0.57 (external, cli)',
+      'user-agent': 'claude-cli/1.0.111 (external, cli)',
       'accept-language': '*',
-      'sec-fetch-mode': 'cors'
+      'sec-fetch-mode': 'cors',
+      'anthropic-beta': 'claude-code-20250219,fine-grained-tool-streaming-2025-05-14',
+      'x-stainless-helper-method': 'stream'
     }
 
     // 需要捕获的 Claude Code 特定 headers
@@ -39,7 +41,9 @@ class ClaudeCodeHeadersService {
       'user-agent',
       'accept-language',
       'sec-fetch-mode',
-      'accept-encoding'
+      'accept-encoding',
+      'anthropic-beta',
+      'x-stainless-helper-method'
     ]
   }
 
