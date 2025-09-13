@@ -1,5 +1,6 @@
 const axios = require('axios')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
+const claudeCodeHeadersService = require('./claudeCodeHeadersService')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 
@@ -54,9 +55,16 @@ class ClaudeConsoleRelayService {
       }
 
       // 创建修改后的请求体
-      const modifiedRequestBody = {
+      let modifiedRequestBody = {
         ...requestBody,
         model: mappedModel
+      }
+
+      // 检查是否是 instcopilot 供应商，需要特殊处理请求体
+      const isInstcopilot =
+        account && account.name && account.name.toLowerCase().includes('instcopilot')
+      if (isInstcopilot) {
+        modifiedRequestBody = this._processInstcopilotRequestBody(modifiedRequestBody)
       }
 
       // 模型兼容性检查已经在调度器中完成，这里不需要再检查
@@ -96,6 +104,13 @@ class ClaudeConsoleRelayService {
         apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
       }
 
+      // 为 instcopilot 供应商添加 beta=true 查询参数
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        const separator = apiEndpoint.includes('?') ? '&' : '?'
+        apiEndpoint += `${separator}beta=true`
+        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
+      }
+
       logger.debug(`🎯 Final API endpoint: ${apiEndpoint}`)
       logger.debug(`[DEBUG] Options passed to relayRequest: ${JSON.stringify(options)}`)
       logger.debug(`[DEBUG] Client headers received: ${JSON.stringify(clientHeaders)}`)
@@ -111,32 +126,56 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
+      // 构建请求头，对 instcopilot 特殊处理
+      let requestHeaders
+      if (isInstcopilot) {
+        // instcopilot 使用专用请求头
+        if (typeof claudeCodeHeadersService.getInstcopilotHeaders === 'function') {
+          requestHeaders = claudeCodeHeadersService.getInstcopilotHeaders(account.apiKey)
+          logger.info('🏷️ Using instcopilot-specific headers for Claude Console request')
+        } else {
+          // 如果方法不存在，使用手动构建的请求头
+          requestHeaders = {
+            'x-api-key': account.apiKey,
+            'content-type': 'application/json',
+            'User-Agent': 'claude-cli/1.0.113 (external, cli)',
+            'x-app': 'cli',
+            Accept: '*/*',
+            Connection: 'keep-alive'
+          }
+          logger.warn('⚠️ getInstcopilotHeaders method not found, using manual headers')
+        }
+      } else {
+        // 标准请求头
+        requestHeaders = {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': userAgent,
+          ...filteredHeaders
+        }
+
+        // 根据 API Key 格式选择认证方式
+        if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+          // Anthropic 官方 API Key 使用 x-api-key
+          requestHeaders['x-api-key'] = account.apiKey
+          logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
+        } else {
+          // 其他 API Key 使用 Authorization Bearer
+          requestHeaders['Authorization'] = `Bearer ${account.apiKey}`
+          logger.debug('[DEBUG] Using Authorization Bearer authentication')
+        }
+      }
+
       // 准备请求配置
       const requestConfig = {
         method: 'POST',
         url: apiEndpoint,
         data: modifiedRequestBody,
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-          'User-Agent': userAgent,
-          ...filteredHeaders
-        },
+        headers: requestHeaders,
         httpsAgent: proxyAgent,
         timeout: config.requestTimeout || 600000,
         signal: abortController.signal,
         validateStatus: () => true // 接受所有状态码
-      }
-
-      // 根据 API Key 格式选择认证方式
-      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
-        // Anthropic 官方 API Key 使用 x-api-key
-        requestConfig.headers['x-api-key'] = account.apiKey
-        logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
-      } else {
-        // 其他 API Key 使用 Authorization Bearer
-        requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
-        logger.debug('[DEBUG] Using Authorization Bearer authentication')
       }
 
       logger.debug(
@@ -276,9 +315,16 @@ class ClaudeConsoleRelayService {
       }
 
       // 创建修改后的请求体
-      const modifiedRequestBody = {
+      let modifiedRequestBody = {
         ...requestBody,
         model: mappedModel
+      }
+
+      // 检查是否是 instcopilot 供应商，需要特殊处理请求体
+      const isInstcopilot =
+        account && account.name && account.name.toLowerCase().includes('instcopilot')
+      if (isInstcopilot) {
+        modifiedRequestBody = this._processInstcopilotRequestBody(modifiedRequestBody)
       }
 
       // 模型兼容性检查已经在调度器中完成，这里不需要再检查
@@ -327,7 +373,14 @@ class ClaudeConsoleRelayService {
 
       // 构建完整的API URL
       const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
-      const apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
+      let apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
+
+      // 为 instcopilot 供应商添加 beta=true 查询参数
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        const separator = apiEndpoint.includes('?') ? '&' : '?'
+        apiEndpoint += `${separator}beta=true`
+        logger.info(`🔧 Added beta=true parameter for instcopilot stream account: ${account.name}`)
+      }
 
       logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
 
@@ -342,32 +395,62 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
+      // 检查是否是 instcopilot 供应商
+      const isInstcopilot =
+        account && account.name && account.name.toLowerCase().includes('instcopilot')
+
+      // 构建请求头，对 instcopilot 特殊处理
+      let requestHeaders
+      if (isInstcopilot) {
+        // instcopilot 使用专用请求头
+        if (typeof claudeCodeHeadersService.getInstcopilotHeaders === 'function') {
+          requestHeaders = claudeCodeHeadersService.getInstcopilotHeaders(account.apiKey)
+          logger.info('🏷️ Using instcopilot-specific headers for Claude Console stream request')
+        } else {
+          // 如果方法不存在，使用手动构建的请求头
+          requestHeaders = {
+            'x-api-key': account.apiKey,
+            'content-type': 'application/json',
+            'User-Agent': 'claude-cli/1.0.113 (external, cli)',
+            'x-app': 'cli',
+            Accept: '*/*',
+            Connection: 'keep-alive'
+          }
+          logger.warn('⚠️ getInstcopilotHeaders method not found in stream, using manual headers')
+        }
+      } else {
+        // 标准请求头
+        requestHeaders = {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': userAgent,
+          ...filteredHeaders
+        }
+      }
+
       // 准备请求配置
       const requestConfig = {
         method: 'POST',
         url: apiEndpoint,
         data: body,
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-          'User-Agent': userAgent,
-          ...filteredHeaders
-        },
+        headers: requestHeaders,
         httpsAgent: proxyAgent,
         timeout: config.requestTimeout || 600000,
         responseType: 'stream',
         validateStatus: () => true // 接受所有状态码
       }
 
-      // 根据 API Key 格式选择认证方式
-      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
-        // Anthropic 官方 API Key 使用 x-api-key
-        requestConfig.headers['x-api-key'] = account.apiKey
-        logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
-      } else {
-        // 其他 API Key 使用 Authorization Bearer
-        requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
-        logger.debug('[DEBUG] Using Authorization Bearer authentication')
+      // 根据 API Key 格式选择认证方式（非 instcopilot 账户）
+      if (!isInstcopilot) {
+        if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+          // Anthropic 官方 API Key 使用 x-api-key
+          requestConfig.headers['x-api-key'] = account.apiKey
+          logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
+        } else {
+          // 其他 API Key 使用 Authorization Bearer
+          requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
+          logger.debug('[DEBUG] Using Authorization Bearer authentication')
+        }
       }
 
       // 添加beta header如果需要
@@ -723,6 +806,63 @@ class ClaudeConsoleRelayService {
         timestamp: new Date().toISOString()
       }
     }
+  }
+
+  // 🏷️ 处理 instcopilot 供应商的特殊请求体格式
+  _processInstcopilotRequestBody(body) {
+    if (!body) {
+      return body
+    }
+
+    // 检查模型类型
+    const model = body.model || ''
+    const isHaikuModel = model.toLowerCase().includes('haiku')
+
+    logger.info(`🏷️ Processing instcopilot request for model: ${model}, isHaiku: ${isHaikuModel}`)
+
+    // Haiku 模型：使用标准格式（与其他供应商一样）
+    if (isHaikuModel) {
+      logger.info('🏷️ Using standard format for haiku model')
+      return body
+    }
+
+    // Sonnet/Opus 模型：需要特殊的消息格式
+    if (body.messages && Array.isArray(body.messages) && body.messages.length > 0) {
+      const firstMessage = body.messages[0]
+
+      // 检查第一个消息是否已经有正确的格式
+      if (firstMessage.role === 'user' && Array.isArray(firstMessage.content)) {
+        const hasSystemReminder = firstMessage.content.some(
+          (item) => item.type === 'text' && item.text === '<system-reminder></system-reminder>'
+        )
+
+        if (!hasSystemReminder) {
+          // 在第一个消息的 content 数组开头插入 system-reminder
+          firstMessage.content.unshift({
+            type: 'text',
+            text: '<system-reminder></system-reminder>'
+          })
+          logger.info('🏷️ Added system-reminder to first message for instcopilot sonnet/opus model')
+        }
+      } else if (firstMessage.role === 'user' && typeof firstMessage.content === 'string') {
+        // 如果第一个消息是字符串格式，转换为数组格式并添加 system-reminder
+        firstMessage.content = [
+          {
+            type: 'text',
+            text: '<system-reminder></system-reminder>'
+          },
+          {
+            type: 'text',
+            text: firstMessage.content
+          }
+        ]
+        logger.info(
+          '🏷️ Converted first message to array format and added system-reminder for instcopilot sonnet/opus model'
+        )
+      }
+    }
+
+    return body
   }
 }
 

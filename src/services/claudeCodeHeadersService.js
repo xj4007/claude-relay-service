@@ -158,10 +158,32 @@ class ClaudeCodeHeadersService {
   }
 
   /**
+   * 获取 instcopilot 专用请求头
+   */
+  getInstcopilotHeaders(accessToken) {
+    return {
+      'x-api-key': accessToken,
+      'content-type': 'application/json',
+      'User-Agent': 'claude-cli/1.0.113 (external, cli)',
+      'x-app': 'cli',
+      Accept: '*/*',
+      Connection: 'keep-alive'
+    }
+  }
+
+  /**
    * 获取账号的 Claude Code headers
    */
-  async getAccountHeaders(accountId) {
+  async getAccountHeaders(accountId, account = null) {
     try {
+      // 如果是 instcopilot 供应商，返回专用请求头
+      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+        logger.debug(`📋 Using instcopilot headers for account ${accountId}`)
+        // 注意：这里不直接返回 instcopilot headers，因为 accessToken 需要在调用时提供
+        // 返回一个标识，让调用方知道这是 instcopilot 账户
+        return { isInstcopilot: true }
+      }
+
       const key = `claude_code_headers:${accountId}`
       const data = await redis.getClient().get(key)
 

@@ -79,6 +79,34 @@ class ClaudeRelayService {
         requestedModel: requestBody.model
       })
 
+      // 检查模型限制（restrictedModels 作为允许列表）
+      if (
+        apiKeyData.enableModelRestriction &&
+        apiKeyData.restrictedModels &&
+        apiKeyData.restrictedModels.length > 0
+      ) {
+        const requestedModel = requestBody.model
+        logger.info(
+          `🔒 Model restriction check - Requested model: ${requestedModel}, Restricted models: ${JSON.stringify(apiKeyData.restrictedModels)}`
+        )
+
+        if (requestedModel && apiKeyData.restrictedModels.includes(requestedModel)) {
+          logger.warn(
+            `🚫 Model restriction violation for key ${apiKeyData.name}: Attempted to use restricted model ${requestedModel}`
+          )
+          return {
+            statusCode: 403,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              error: {
+                type: 'forbidden',
+                message: '暂无该模型访问权限'
+              }
+            })
+          }
+        }
+      }
+
       // 生成会话哈希用于sticky会话
       const sessionHash = sessionHelper.generateSessionHash(requestBody)
 
@@ -693,13 +721,6 @@ class ClaudeRelayService {
         requestPath = customUrl.pathname
       }
 
-      // 为 instcopilot 供应商添加 beta=true 查询参数
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
-        const separator = requestPath.includes('?') ? '&' : '?'
-        requestPath += `${separator}beta=true`
-        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
-      }
-
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
@@ -717,7 +738,7 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.111 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
@@ -725,13 +746,10 @@ class ClaudeRelayService {
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
 
-      // 使用自定义的 betaHeader 或默认值，但如果是真实的 Claude Code 请求且已有 beta header，则不覆盖
+      // 使用自定义的 betaHeader 或默认值
       const betaHeader =
         requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
-      if (
-        betaHeader &&
-        !(isRealClaudeCode && (finalHeaders['anthropic-beta'] || finalHeaders['Anthropic-Beta']))
-      ) {
+      if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
 
@@ -848,6 +866,36 @@ class ClaudeRelayService {
         requestedModel: requestBody.model
       })
 
+      // 检查模型限制（restrictedModels 作为允许列表）
+      if (
+        apiKeyData.enableModelRestriction &&
+        apiKeyData.restrictedModels &&
+        apiKeyData.restrictedModels.length > 0
+      ) {
+        const requestedModel = requestBody.model
+        logger.info(
+          `🔒 [Stream] Model restriction check - Requested model: ${requestedModel}, Restricted models: ${JSON.stringify(apiKeyData.restrictedModels)}`
+        )
+
+        if (requestedModel && apiKeyData.restrictedModels.includes(requestedModel)) {
+          logger.warn(
+            `🚫 Model restriction violation for key ${apiKeyData.name}: Attempted to use restricted model ${requestedModel}`
+          )
+
+          // 对于流式响应，需要写入错误并结束流
+          const errorResponse = JSON.stringify({
+            error: {
+              type: 'forbidden',
+              message: '暂无该模型访问权限'
+            }
+          })
+
+          responseStream.writeHead(403, { 'Content-Type': 'application/json' })
+          responseStream.end(errorResponse)
+          return
+        }
+      }
+
       // 生成会话哈希用于sticky会话
       const sessionHash = sessionHelper.generateSessionHash(requestBody)
 
@@ -944,18 +992,10 @@ class ClaudeRelayService {
     return new Promise((resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
 
-      // 为 instcopilot 供应商添加 beta=true 查询参数
-      let requestPath = url.pathname
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
-        const separator = requestPath.includes('?') ? '&' : '?'
-        requestPath += `${separator}beta=true`
-        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
-      }
-
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
-        path: requestPath,
+        path: url.pathname,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -969,20 +1009,17 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.111 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
       logger.info(
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
-      // 使用自定义的 betaHeader 或默认值，但如果是真实的 Claude Code 请求且已有 beta header，则不覆盖
+      // 使用自定义的 betaHeader 或默认值
       const betaHeader =
         requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
-      if (
-        betaHeader &&
-        !(isRealClaudeCode && (finalHeaders['anthropic-beta'] || finalHeaders['Anthropic-Beta']))
-      ) {
+      if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
 
@@ -1495,25 +1532,10 @@ class ClaudeRelayService {
     proxyAgent,
     clientHeaders,
     responseStream,
-    requestOptions = {},
-    accountId = null
+    requestOptions = {}
   ) {
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
-
-      // 获取账户信息（如果有accountId）
-      let account = null
-      if (accountId) {
-        account = await claudeAccountService.getAccount(accountId)
-      }
-
-      // 为 instcopilot 供应商添加 beta=true 查询参数
-      let requestPath = url.pathname
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
-        const separator = requestPath.includes('?') ? '&' : '?'
-        requestPath += `${separator}beta=true`
-        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
-      }
 
       // 获取过滤后的客户端 headers
       const filteredHeaders = this._filterClientHeaders(clientHeaders)
@@ -1521,7 +1543,7 @@ class ClaudeRelayService {
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
-        path: requestPath,
+        path: url.pathname,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
