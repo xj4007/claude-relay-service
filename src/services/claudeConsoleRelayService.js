@@ -9,6 +9,91 @@ class ClaudeConsoleRelayService {
     this.defaultUserAgent = 'claude-cli/1.0.69 (external, cli)'
   }
 
+  // 🛡️ 错误信息脱敏处理 - 将供应商具体错误转换为通用提示
+  _sanitizeErrorMessage(statusCode, originalError = '', accountId = '') {
+    const timestamp = new Date().toISOString()
+
+    // 记录原始错误到日志（用于调试）
+    logger.error(
+      `🔍 Original vendor error (Account: ${accountId}, Status: ${statusCode}):`,
+      originalError
+    )
+
+    // 根据状态码返回通用化的错误信息
+    switch (statusCode) {
+      case 401:
+        return {
+          error: {
+            type: 'authentication_error',
+            message: '服务认证失败，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+
+      case 403:
+        return {
+          error: {
+            type: 'permission_error',
+            message: '访问权限不足，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+
+      case 429:
+        return {
+          error: {
+            type: 'rate_limit_error',
+            message: '请求频率过高，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+
+      case 529:
+        return {
+          error: {
+            type: 'overloaded_error',
+            message: '服务负载过高，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        return {
+          error: {
+            type: 'server_error',
+            message: '服务暂时不可用，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+
+      default:
+        return {
+          error: {
+            type: 'service_error',
+            message: '服务出现异常，系统正在切换账号，请稍后重试'
+          },
+          timestamp
+        }
+    }
+  }
+
+  // 🛡️ 流式响应错误脱敏处理
+  _sendSanitizedStreamError(responseStream, statusCode, originalError = '', accountId = '') {
+    if (responseStream.destroyed) {
+      return
+    }
+
+    const sanitizedError = this._sanitizeErrorMessage(statusCode, originalError, accountId)
+
+    // 发送脱敏后的错误事件
+    responseStream.write('event: error\n')
+    responseStream.write(`data: ${JSON.stringify(sanitizedError)}\n\n`)
+    responseStream.end()
+  }
+
   // 🚀 转发请求到Claude Console API
   async relayRequest(
     requestBody,
@@ -107,7 +192,9 @@ class ClaudeConsoleRelayService {
         const separator = apiEndpoint.includes('?') ? '&' : '?'
         apiEndpoint += `${separator}beta=true`
         const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
-        logger.info(`🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} account: ${account.name}`)
+        logger.info(
+          `🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} account: ${account.name}`
+        )
       }
 
       logger.debug(`🎯 Final API endpoint: ${apiEndpoint}`)
@@ -132,7 +219,9 @@ class ClaudeConsoleRelayService {
         const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
         try {
           requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
-          logger.info(`🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console request`)
+          logger.info(
+            `🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console request`
+          )
         } catch (error) {
           // 如果方法失败，使用手动构建的请求头
           requestHeaders = {
@@ -143,7 +232,10 @@ class ClaudeConsoleRelayService {
             Accept: '*/*',
             Connection: 'keep-alive'
           }
-          logger.warn(`⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers, using manual headers:`, error.message)
+          logger.warn(
+            `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers, using manual headers:`,
+            error.message
+          )
         }
       } else {
         // 标准请求头
@@ -219,6 +311,14 @@ class ClaudeConsoleRelayService {
       if (response.status === 401) {
         logger.warn(`🚫 Unauthorized error detected for Claude Console account ${accountId}`)
         await claudeConsoleAccountService.markAccountUnauthorized(accountId)
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status === 429) {
         logger.warn(`🚫 Rate limit detected for Claude Console account ${accountId}`)
         // 收到429先检查是否因为超过了手动配置的每日额度
@@ -227,9 +327,44 @@ class ClaudeConsoleRelayService {
         })
 
         await claudeConsoleAccountService.markAccountRateLimited(accountId)
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status === 529) {
         logger.warn(`🚫 Overload error detected for Claude Console account ${accountId}`)
         await claudeConsoleAccountService.markAccountOverloaded(accountId)
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
+      } else if (response.status >= 400) {
+        // 处理其他4xx/5xx错误
+        logger.warn(
+          `🚫 Error response detected for Claude Console account ${accountId}: ${response.status}`
+        )
+        // 对于严重错误，可以考虑添加更多错误处理逻辑
+        if (response.status >= 500) {
+          logger.warn(
+            `🚨 Server error ${response.status} for Claude Console account ${accountId}, may need manual check`
+          )
+        }
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status === 200 || response.status === 201) {
         // 如果请求成功，检查并移除错误状态
         const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(accountId)
@@ -378,7 +513,9 @@ class ClaudeConsoleRelayService {
         const separator = apiEndpoint.includes('?') ? '&' : '?'
         apiEndpoint += `${separator}beta=true`
         const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
-        logger.info(`🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} stream account: ${account.name}`)
+        logger.info(
+          `🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} stream account: ${account.name}`
+        )
       }
 
       logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
@@ -401,7 +538,9 @@ class ClaudeConsoleRelayService {
         const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
         try {
           requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
-          logger.info(`🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console stream request`)
+          logger.info(
+            `🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console stream request`
+          )
         } catch (error) {
           // 如果方法失败，使用手动构建的请求头
           requestHeaders = {
@@ -412,7 +551,10 @@ class ClaudeConsoleRelayService {
             Accept: '*/*',
             Connection: 'keep-alive'
           }
-          logger.warn(`⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers in stream, using manual headers:`, error.message)
+          logger.warn(
+            `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers in stream, using manual headers:`,
+            error.message
+          )
         }
       } else {
         // 标准请求头
@@ -479,30 +621,15 @@ class ClaudeConsoleRelayService {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
             }
 
-            // 设置错误响应的状态码和响应头
-            if (!responseStream.headersSent) {
-              const errorHeaders = {
-                'Content-Type': response.headers['content-type'] || 'application/json',
-                'Cache-Control': 'no-cache',
-                Connection: 'keep-alive'
-              }
-              // 避免 Transfer-Encoding 冲突，让 Express 自动处理
-              delete errorHeaders['Transfer-Encoding']
-              delete errorHeaders['Content-Length']
-              responseStream.writeHead(response.status, errorHeaders)
-            }
-
-            // 直接透传错误数据，不进行包装
+            // 🛡️ 发送脱敏后的错误信息而不是透传原始错误
+            let errorData = ''
             response.data.on('data', (chunk) => {
-              if (!responseStream.destroyed) {
-                responseStream.write(chunk)
-              }
+              errorData += chunk.toString()
             })
 
             response.data.on('end', () => {
-              if (!responseStream.destroyed) {
-                responseStream.end()
-              }
+              // 使用脱敏处理发送错误
+              this._sendSanitizedStreamError(responseStream, response.status, errorData, accountId)
               resolve() // 不抛出异常，正常完成流处理
             })
             return
@@ -622,14 +749,10 @@ class ClaudeConsoleRelayService {
                 error
               )
               if (!responseStream.destroyed) {
+                // 🛡️ 使用脱敏错误处理而不是透传具体错误信息
+                const sanitizedError = this._sanitizeErrorMessage(500, error.message, accountId)
                 responseStream.write('event: error\n')
-                responseStream.write(
-                  `data: ${JSON.stringify({
-                    error: 'Stream processing error',
-                    message: error.message,
-                    timestamp: new Date().toISOString()
-                  })}\n\n`
-                )
+                responseStream.write(`data: ${JSON.stringify(sanitizedError)}\n\n`)
               }
             }
           })
@@ -667,15 +790,8 @@ class ClaudeConsoleRelayService {
               error
             )
             if (!responseStream.destroyed) {
-              responseStream.write('event: error\n')
-              responseStream.write(
-                `data: ${JSON.stringify({
-                  error: 'Stream error',
-                  message: error.message,
-                  timestamp: new Date().toISOString()
-                })}\n\n`
-              )
-              responseStream.end()
+              // 🛡️ 使用脱敏错误处理
+              this._sendSanitizedStreamError(responseStream, 500, error.message, accountId)
             }
             reject(error)
           })
@@ -705,26 +821,9 @@ class ClaudeConsoleRelayService {
             }
           }
 
-          // 发送错误响应
-          if (!responseStream.headersSent) {
-            responseStream.writeHead(error.response?.status || 500, {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache',
-              Connection: 'keep-alive'
-            })
-          }
-
-          if (!responseStream.destroyed) {
-            responseStream.write('event: error\n')
-            responseStream.write(
-              `data: ${JSON.stringify({
-                error: error.message,
-                code: error.code,
-                timestamp: new Date().toISOString()
-              })}\n\n`
-            )
-            responseStream.end()
-          }
+          // 🛡️ 发送脱敏后的错误响应
+          const statusCode = error.response?.status || 500
+          this._sendSanitizedStreamError(responseStream, statusCode, error.message, accountId)
 
           reject(error)
         })
@@ -814,13 +913,18 @@ class ClaudeConsoleRelayService {
     const model = body.model || ''
     const isHaikuModel = model.toLowerCase().includes('haiku')
 
-    logger.info(`🏷️ Processing special vendor request for model: ${model}, isHaiku: ${isHaikuModel}`)
+    logger.info(
+      `🏷️ Processing special vendor request for model: ${model}, isHaiku: ${isHaikuModel}`
+    )
 
     // Haiku 模型：使用标准格式（与其他供应商一样）
     if (isHaikuModel) {
       logger.info('🏷️ Using standard format for haiku model')
       return body
     }
+
+    // Sonnet/Opus 模型：处理 system 参数
+    this._processSystemParameter(body)
 
     // Sonnet/Opus 模型：需要特殊的消息格式
     if (body.messages && Array.isArray(body.messages) && body.messages.length > 0) {
@@ -838,7 +942,9 @@ class ClaudeConsoleRelayService {
             type: 'text',
             text: '<system-reminder></system-reminder>'
           })
-          logger.info('🏷️ Added system-reminder to first message for special vendor sonnet/opus model')
+          logger.info(
+            '🏷️ Added system-reminder to first message for special vendor sonnet/opus model'
+          )
         }
       } else if (firstMessage.role === 'user' && typeof firstMessage.content === 'string') {
         // 如果第一个消息是字符串格式，转换为数组格式并添加 system-reminder
@@ -859,6 +965,59 @@ class ClaudeConsoleRelayService {
     }
 
     return body
+  }
+
+  // 🔧 处理 system 参数，确保第一个对象包含指定内容
+  _processSystemParameter(body) {
+    const requiredSystemText = "You are Claude Code, Anthropic's official CLI for Claude."
+
+    if (!body.system) {
+      // 如果没有 system 参数，创建一个
+      body.system = [
+        {
+          type: 'text',
+          text: requiredSystemText
+        }
+      ]
+      logger.info('🏷️ Added system parameter with Claude Code text for special vendor')
+      return
+    }
+
+    if (!Array.isArray(body.system)) {
+      // 如果 system 不是数组，转换为数组格式
+      body.system = [
+        {
+          type: 'text',
+          text: requiredSystemText
+        }
+      ]
+      logger.info('🏷️ Converted system to array format with Claude Code text for special vendor')
+      return
+    }
+
+    if (body.system.length === 0) {
+      // 如果 system 数组为空，添加必需内容
+      body.system.push({
+        type: 'text',
+        text: requiredSystemText
+      })
+      logger.info('🏷️ Added Claude Code text to empty system array for special vendor')
+      return
+    }
+
+    // 检查第一个对象是否包含必需的文本
+    const firstSystemItem = body.system[0]
+    if (firstSystemItem.type === 'text' && firstSystemItem.text === requiredSystemText) {
+      logger.debug('🏷️ System parameter already contains required Claude Code text')
+      return
+    }
+
+    // 如果第一个对象不是必需的内容，在开头插入
+    body.system.unshift({
+      type: 'text',
+      text: requiredSystemText
+    })
+    logger.info('🏷️ Inserted Claude Code text at beginning of system array for special vendor')
   }
 }
 
