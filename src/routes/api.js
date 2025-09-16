@@ -59,6 +59,12 @@ async function handleMessagesRequest(req, res) {
       }
     }
 
+    // 设置 max_tokens 默认值（如果用户未传递）
+    if (!req.body.max_tokens) {
+      req.body.max_tokens = 32000
+      logger.api(`🔢 Added default max_tokens: 32000 for key: ${req.apiKey.name}`)
+    }
+
     // 检查是否为流式请求
     const isStream = req.body.stream === true
 
