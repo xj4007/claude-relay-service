@@ -60,11 +60,9 @@ class ClaudeConsoleRelayService {
         model: mappedModel
       }
 
-      // 检查是否是 instcopilot 供应商，需要特殊处理请求体
-      const isInstcopilot =
-        account && account.name && account.name.toLowerCase().includes('instcopilot')
-      if (isInstcopilot) {
-        modifiedRequestBody = this._processInstcopilotRequestBody(modifiedRequestBody)
+      // 检查是否需要特殊处理请求体
+      if (claudeCodeHeadersService.needsSpecialRequestBody(account)) {
+        modifiedRequestBody = this._processSpecialVendorRequestBody(modifiedRequestBody)
       }
 
       // 模型兼容性检查已经在调度器中完成，这里不需要再检查
@@ -104,11 +102,12 @@ class ClaudeConsoleRelayService {
         apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
       }
 
-      // 为 instcopilot 供应商添加 beta=true 查询参数
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+      // 为特殊供应商添加 beta=true 查询参数
+      if (claudeCodeHeadersService.needsBetaParam(account)) {
         const separator = apiEndpoint.includes('?') ? '&' : '?'
         apiEndpoint += `${separator}beta=true`
-        logger.info(`🔧 Added beta=true parameter for instcopilot account: ${account.name}`)
+        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+        logger.info(`🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} account: ${account.name}`)
       }
 
       logger.debug(`🎯 Final API endpoint: ${apiEndpoint}`)
@@ -126,15 +125,16 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
-      // 构建请求头，对 instcopilot 特殊处理
+      // 构建请求头，对特殊供应商特殊处理
       let requestHeaders
-      if (isInstcopilot) {
-        // instcopilot 使用专用请求头
-        if (typeof claudeCodeHeadersService.getInstcopilotHeaders === 'function') {
-          requestHeaders = claudeCodeHeadersService.getInstcopilotHeaders(account.apiKey)
-          logger.info('🏷️ Using instcopilot-specific headers for Claude Console request')
-        } else {
-          // 如果方法不存在，使用手动构建的请求头
+      if (claudeCodeHeadersService.needsSpecialHeaders(account)) {
+        // 特殊供应商使用专用请求头
+        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+        try {
+          requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
+          logger.info(`🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console request`)
+        } catch (error) {
+          // 如果方法失败，使用手动构建的请求头
           requestHeaders = {
             'x-api-key': account.apiKey,
             'content-type': 'application/json',
@@ -143,7 +143,7 @@ class ClaudeConsoleRelayService {
             Accept: '*/*',
             Connection: 'keep-alive'
           }
-          logger.warn('⚠️ getInstcopilotHeaders method not found, using manual headers')
+          logger.warn(`⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers, using manual headers:`, error.message)
         }
       } else {
         // 标准请求头
@@ -320,11 +320,9 @@ class ClaudeConsoleRelayService {
         model: mappedModel
       }
 
-      // 检查是否是 instcopilot 供应商，需要特殊处理请求体
-      const isInstcopilot =
-        account && account.name && account.name.toLowerCase().includes('instcopilot')
-      if (isInstcopilot) {
-        modifiedRequestBody = this._processInstcopilotRequestBody(modifiedRequestBody)
+      // 检查是否需要特殊处理请求体
+      if (claudeCodeHeadersService.needsSpecialRequestBody(account)) {
+        modifiedRequestBody = this._processSpecialVendorRequestBody(modifiedRequestBody)
       }
 
       // 模型兼容性检查已经在调度器中完成，这里不需要再检查
@@ -375,11 +373,12 @@ class ClaudeConsoleRelayService {
       const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
       let apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
 
-      // 为 instcopilot 供应商添加 beta=true 查询参数
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
+      // 为特殊供应商添加 beta=true 查询参数
+      if (claudeCodeHeadersService.needsBetaParam(account)) {
         const separator = apiEndpoint.includes('?') ? '&' : '?'
         apiEndpoint += `${separator}beta=true`
-        logger.info(`🔧 Added beta=true parameter for instcopilot stream account: ${account.name}`)
+        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+        logger.info(`🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} stream account: ${account.name}`)
       }
 
       logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
@@ -395,19 +394,16 @@ class ClaudeConsoleRelayService {
         clientHeaders?.['User-Agent'] ||
         this.defaultUserAgent
 
-      // 检查是否是 instcopilot 供应商
-      const isInstcopilot =
-        account && account.name && account.name.toLowerCase().includes('instcopilot')
-
-      // 构建请求头，对 instcopilot 特殊处理
+      // 构建请求头，对特殊供应商特殊处理
       let requestHeaders
-      if (isInstcopilot) {
-        // instcopilot 使用专用请求头
-        if (typeof claudeCodeHeadersService.getInstcopilotHeaders === 'function') {
-          requestHeaders = claudeCodeHeadersService.getInstcopilotHeaders(account.apiKey)
-          logger.info('🏷️ Using instcopilot-specific headers for Claude Console stream request')
-        } else {
-          // 如果方法不存在，使用手动构建的请求头
+      if (claudeCodeHeadersService.needsSpecialHeaders(account)) {
+        // 特殊供应商使用专用请求头
+        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+        try {
+          requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
+          logger.info(`🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console stream request`)
+        } catch (error) {
+          // 如果方法失败，使用手动构建的请求头
           requestHeaders = {
             'x-api-key': account.apiKey,
             'content-type': 'application/json',
@@ -416,7 +412,7 @@ class ClaudeConsoleRelayService {
             Accept: '*/*',
             Connection: 'keep-alive'
           }
-          logger.warn('⚠️ getInstcopilotHeaders method not found in stream, using manual headers')
+          logger.warn(`⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers in stream, using manual headers:`, error.message)
         }
       } else {
         // 标准请求头
@@ -440,8 +436,8 @@ class ClaudeConsoleRelayService {
         validateStatus: () => true // 接受所有状态码
       }
 
-      // 根据 API Key 格式选择认证方式（非 instcopilot 账户）
-      if (!isInstcopilot) {
+      // 根据 API Key 格式选择认证方式（非特殊供应商账户）
+      if (!claudeCodeHeadersService.needsSpecialHeaders(account)) {
         if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
           // Anthropic 官方 API Key 使用 x-api-key
           requestConfig.headers['x-api-key'] = account.apiKey
@@ -808,8 +804,8 @@ class ClaudeConsoleRelayService {
     }
   }
 
-  // 🏷️ 处理 instcopilot 供应商的特殊请求体格式
-  _processInstcopilotRequestBody(body) {
+  // 🏷️ 处理特殊供应商的特殊请求体格式（instcopilot、anyrouter等）
+  _processSpecialVendorRequestBody(body) {
     if (!body) {
       return body
     }
@@ -818,7 +814,7 @@ class ClaudeConsoleRelayService {
     const model = body.model || ''
     const isHaikuModel = model.toLowerCase().includes('haiku')
 
-    logger.info(`🏷️ Processing instcopilot request for model: ${model}, isHaiku: ${isHaikuModel}`)
+    logger.info(`🏷️ Processing special vendor request for model: ${model}, isHaiku: ${isHaikuModel}`)
 
     // Haiku 模型：使用标准格式（与其他供应商一样）
     if (isHaikuModel) {
@@ -842,7 +838,7 @@ class ClaudeConsoleRelayService {
             type: 'text',
             text: '<system-reminder></system-reminder>'
           })
-          logger.info('🏷️ Added system-reminder to first message for instcopilot sonnet/opus model')
+          logger.info('🏷️ Added system-reminder to first message for special vendor sonnet/opus model')
         }
       } else if (firstMessage.role === 'user' && typeof firstMessage.content === 'string') {
         // 如果第一个消息是字符串格式，转换为数组格式并添加 system-reminder
@@ -857,7 +853,7 @@ class ClaudeConsoleRelayService {
           }
         ]
         logger.info(
-          '🏷️ Converted first message to array format and added system-reminder for instcopilot sonnet/opus model'
+          '🏷️ Converted first message to array format and added system-reminder for special vendor sonnet/opus model'
         )
       }
     }

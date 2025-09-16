@@ -26,6 +26,21 @@ class ClaudeCodeHeadersService {
       'x-stainless-helper-method': 'stream'
     }
 
+    // 特殊供应商配置 - 在这里统一配置所有需要特殊处理的供应商
+    this.specialVendors = {
+      instcopilot: {
+        needsSpecialHeaders: true,
+        needsBetaParam: true,
+        needsSpecialRequestBody: true
+      },
+      anyrouter: {
+        needsSpecialHeaders: true,
+        needsBetaParam: true,
+        needsSpecialRequestBody: true
+      }
+      // 未来新增供应商只需要在这里添加配置即可
+    }
+
     // 需要捕获的 Claude Code 特定 headers
     this.claudeCodeHeaderKeys = [
       'x-stainless-retry-count',
@@ -45,6 +60,47 @@ class ClaudeCodeHeadersService {
       'anthropic-beta',
       'x-stainless-helper-method'
     ]
+  }
+
+  /**
+   * 检测账户是否是特殊供应商
+   */
+  detectSpecialVendor(account) {
+    if (!account || !account.name) {
+      return null
+    }
+
+    const accountName = account.name.toLowerCase()
+    for (const [vendorName, config] of Object.entries(this.specialVendors)) {
+      if (accountName.includes(vendorName)) {
+        return { vendorName, config }
+      }
+    }
+    return null
+  }
+
+  /**
+   * 检查账户是否需要特殊请求头
+   */
+  needsSpecialHeaders(account) {
+    const specialVendor = this.detectSpecialVendor(account)
+    return specialVendor?.config.needsSpecialHeaders || false
+  }
+
+  /**
+   * 检查账户是否需要beta参数
+   */
+  needsBetaParam(account) {
+    const specialVendor = this.detectSpecialVendor(account)
+    return specialVendor?.config.needsBetaParam || false
+  }
+
+  /**
+   * 检查账户是否需要特殊请求体处理
+   */
+  needsSpecialRequestBody(account) {
+    const specialVendor = this.detectSpecialVendor(account)
+    return specialVendor?.config.needsSpecialRequestBody || false
   }
 
   /**
@@ -158,9 +214,23 @@ class ClaudeCodeHeadersService {
   }
 
   /**
-   * 获取 instcopilot 专用请求头
+   * 获取 instcopilot 专用请求头（向后兼容）
    */
   getInstcopilotHeaders(accessToken) {
+    return this.getSpecialVendorHeaders(accessToken)
+  }
+
+  /**
+   * 获取 anyrouter 专用请求头
+   */
+  getAnyrouterHeaders(accessToken) {
+    return this.getSpecialVendorHeaders(accessToken)
+  }
+
+  /**
+   * 获取特殊供应商专用请求头（通用方法）
+   */
+  getSpecialVendorHeaders(accessToken) {
     return {
       'x-api-key': accessToken,
       'content-type': 'application/json',
@@ -176,12 +246,16 @@ class ClaudeCodeHeadersService {
    */
   async getAccountHeaders(accountId, account = null) {
     try {
-      // 如果是 instcopilot 供应商，返回专用请求头
-      if (account && account.name && account.name.toLowerCase().includes('instcopilot')) {
-        logger.debug(`📋 Using instcopilot headers for account ${accountId}`)
-        // 注意：这里不直接返回 instcopilot headers，因为 accessToken 需要在调用时提供
-        // 返回一个标识，让调用方知道这是 instcopilot 账户
-        return { isInstcopilot: true }
+      // 检测是否是特殊供应商
+      const specialVendor = this.detectSpecialVendor(account)
+      if (specialVendor) {
+        logger.debug(`📋 Using ${specialVendor.vendorName} headers for account ${accountId}`)
+        // 返回一个标识，让调用方知道这是特殊供应商账户
+        return {
+          isSpecialVendor: true,
+          vendorName: specialVendor.vendorName,
+          config: specialVendor.config
+        }
       }
 
       const key = `claude_code_headers:${accountId}`
