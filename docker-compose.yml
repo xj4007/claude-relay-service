@@ -6,8 +6,10 @@ version: '3.8'
 services:
   # 🚀 Claude Relay Service
   claude-relay:
-    build: .
-    image: weishaw/claude-relay-service:latest
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    # image: weishaw/claude-relay-service:latest  # 注释掉远端镜像，使用本地构建
     restart: unless-stopped
     ports:
       # 绑定地址：生产环境建议使用反向代理，设置 BIND_HOST=127.0.0.1
@@ -31,10 +33,10 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       
-      # 📊 Redis 配置
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # 📊 Redis 配置 (从.env文件读取)
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_ENABLE_TLS=${REDIS_ENABLE_TLS:-}
       
@@ -70,8 +72,6 @@ services:
       - DEBUG=${DEBUG:-false}
       - ENABLE_CORS=${ENABLE_CORS:-true}
       - TRUST_PROXY=${TRUST_PROXY:-true}
-    depends_on:
-      - redis
     networks:
       - claude-relay-network
     healthcheck:
@@ -80,85 +80,62 @@ services:
       timeout: 10s
       retries: 3
 
-  # 📊 Redis Database
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    # 仅在容器网络内部暴露端口，不映射到主机
-    expose:
-      - "6379"
-    # 注意：如需本地调试访问，可取消下行注释（生产环境禁用）
-    # ports:
-    #   - "127.0.0.1:${REDIS_PORT:-6379}:6379"
-    volumes:
-      - ./redis_data:/data
-    command: redis-server --save 60 1 --appendonly yes --appendfsync everysec
-    networks:
-      - claude-relay-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+  # 📈 Redis Monitoring (Optional) - 注释掉，因为使用远程Redis
+  # redis-commander:
+  #   image: rediscommander/redis-commander:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:${REDIS_WEB_PORT:-8081}:8081"
+  #   environment:
+  #     - REDIS_HOSTS=remote:43.154.19.173:26739:0:XIANjian4SANyun
+  #   networks:
+  #     - claude-relay-network
+  #   profiles:
+  #     - monitoring
 
-  # 📈 Redis Monitoring (Optional)
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${REDIS_WEB_PORT:-8081}:8081"
-    environment:
-      - REDIS_HOSTS=local:redis:6379
-    depends_on:
-      - redis
-    networks:
-      - claude-relay-network
-    profiles:
-      - monitoring
+  # 📊 Application Monitoring (Optional) - 已注释，程序内置 /metrics 端点
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+  #   volumes:
+  #     - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus_data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--web.enable-lifecycle'
+  #   networks:
+  #     - claude-relay-network
+  #   profiles:
+  #     - monitoring
 
-  # 📊 Application Monitoring (Optional)
-  prometheus:
-    image: prom/prometheus:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    networks:
-      - claude-relay-network
-    profiles:
-      - monitoring
+  # 📈 Grafana Dashboard (Optional) - 已注释，程序内置 Web 管理界面
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #     - ./config/grafana:/etc/grafana/provisioning
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - claude-relay-network
+  #   profiles:
+  #     - monitoring
 
-  # 📈 Grafana Dashboard (Optional)
-  grafana:
-    image: grafana/grafana:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./config/grafana:/etc/grafana/provisioning
-    depends_on:
-      - prometheus
-    networks:
-      - claude-relay-network
-    profiles:
-      - monitoring
-
-volumes:
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
+# volumes: # 已注释，因为监控服务已禁用
+#  prometheus_data:
+#    driver: local
+#  grafana_data:
+#    driver: local
 
 networks:
   claude-relay-network:

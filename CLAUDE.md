@@ -6,7 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claude 和 Gemini 双平台。提供多账户管理、API Key 认证、代理配置和现代化 Web 管理界面。该服务作为客户端（如 SillyTavern、Claude Code、Gemini CLI）与 AI API 之间的中间件，提供认证、限流、监控等功能。
+Claude Relay Service 是一个功能完整的 AI API 中转服务，支持多平台：Claude、Gemini、OpenAI、Azure OpenAI 和 AWS Bedrock。提供多账户管理、API Key 认证、代理配置和现代化 Web 管理界面。该服务作为客户端（如 SillyTavern、Claude Code、Gemini CLI、Codex）与 AI API 之间的中间件，提供认证、限流、监控等功能。
+
+### 支持的AI平台
+- **Claude**: Anthropic官方API和Claude Console（claude.ai）
+- **Gemini**: Google Gemini API
+- **OpenAI**: OpenAI API（通过转换到Claude格式）
+- **Azure OpenAI**: Azure OpenAI服务
+- **AWS Bedrock**: Amazon Bedrock Claude模型
 
 ## 核心架构
 
@@ -19,11 +26,30 @@ Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claud
 
 ### 主要服务组件
 
+#### 核心服务
 - **claudeRelayService.js**: 核心代理服务，处理请求转发和流式响应
-- **claudeAccountService.js**: Claude账户管理，OAuth token刷新和账户选择
+- **claudeAccountService.js**: Claude OAuth账户管理，token刷新和账户选择
+- **claudeConsoleAccountService.js**: Claude Console账户管理（claude.ai网站登录）
 - **geminiAccountService.js**: Gemini账户管理，Google OAuth token刷新和账户选择
+- **geminiRelayService.js**: Gemini API请求代理和响应处理
+- **bedrockAccountService.js**: AWS Bedrock账户管理和凭据处理
+- **bedrockRelayService.js**: AWS Bedrock API请求代理
+- **azureOpenaiAccountService.js**: Azure OpenAI账户管理
+- **azureOpenaiRelayService.js**: Azure OpenAI API代理服务
+- **openaiAccountService.js**: OpenAI账户管理
+- **openaiToClaude.js**: OpenAI到Claude格式的请求转换器
+
+#### 支持服务
 - **apiKeyService.js**: API Key管理，验证、限流和使用统计
-- **oauthHelper.js**: OAuth工具，PKCE流程实现和代理支持
+- **accountGroupService.js**: 账户分组管理，支持专用账户池
+- **unifiedClaudeScheduler.js**: Claude账户统一调度器
+- **unifiedGeminiScheduler.js**: Gemini账户统一调度器
+- **unifiedOpenAIScheduler.js**: OpenAI账户统一调度器
+- **tokenRefreshService.js**: Token自动刷新服务
+- **pricingService.js**: 模型价格管理和成本计算
+- **rateLimitCleanupService.js**: 限流状态自动清理服务
+- **userService.js**: 用户管理服务（支持LDAP集成）
+- **webhookService.js**: Webhook通知服务
 
 ### 认证和代理流程
 
@@ -46,7 +72,7 @@ Claude Relay Service 是一个功能完整的 AI API 中转服务，支持 Claud
 
 ### 基本开发命令
 
-````bash
+```bash
 # 安装依赖和初始化
 npm install
 npm run setup                  # 生成配置和管理员凭据
@@ -54,19 +80,56 @@ npm run install:web           # 安装Web界面依赖
 
 # 开发和运行
 npm run dev                   # 开发模式（热重载）
-npm start                     # 生产模式
+npm start                     # 生产模式（先lint后启动）
 npm test                      # 运行测试
-npm run lint                  # 代码检查
+npm run lint                  # 代码检查并修复
+npm run lint:check            # 仅检查不修复
+npm run format                # 格式化代码
+npm run format:check          # 检查格式
+
+# Web界面构建
+npm run build:web             # 构建Web管理界面
 
 # Docker部署
-docker-compose up -d          # 推荐方式
-docker-compose --profile monitoring up -d  # 包含监控
+npm run docker:build          # 构建Docker镜像
+npm run docker:up             # 启动Docker容器
+npm run docker:down           # 停止Docker容器
 
 # 服务管理
 npm run service:start:daemon  # 后台启动（推荐）
+npm run service:start         # 前台启动
+npm run service:restart       # 重启服务
+npm run service:restart:daemon # 后台重启
 npm run service:status        # 查看服务状态
 npm run service:logs          # 查看日志
+npm run service:logs:follow   # 实时跟踪日志
 npm run service:stop          # 停止服务
+
+# 系统监控和管理
+npm run monitor               # 增强监控脚本
+npm run status                # 统一状态检查
+npm run status:detail         # 详细状态信息
+npm run cli                   # CLI工具入口
+
+# 数据管理
+npm run data:export           # 导出数据
+npm run data:import           # 导入数据
+npm run data:export:sanitized # 导出脱敏数据
+npm run data:export:enhanced  # 增强导出
+npm run data:export:encrypted # 加密导出
+npm run data:import:enhanced  # 增强导入
+npm run data:debug            # 调试Redis键值
+
+# 价格和成本管理
+npm run update:pricing        # 更新模型价格
+npm run init:costs            # 初始化成本数据
+npm run test:pricing-fallback # 测试价格回退机制
+
+# 数据库迁移
+npm run migrate:apikey-expiry # 迁移API Key过期时间
+npm run migrate:apikey-expiry:dry # 干运行迁移
+npm run migrate:fix-usage-stats # 修复使用统计数据
+```
 
 ### 开发环境配置
 必须配置的环境变量：
@@ -81,7 +144,7 @@ npm run service:stop          # 停止服务
 cp config/config.example.js config/config.js
 cp .env.example .env
 npm run setup  # 自动生成密钥并创建管理员账户
-````
+```
 
 ## Web界面功能
 
@@ -103,24 +166,67 @@ npm run setup  # 自动生成密钥并创建管理员账户
 
 ## 重要端点
 
-### API转发端点
+### API转发端点（多平台支持）
 
+#### Claude API端点
 - `POST /api/v1/messages` - 主要消息处理端点（支持流式）
+- `POST /claude/v1/messages` - Claude路由别名（与/api功能相同）
 - `GET /api/v1/models` - 模型列表（兼容性）
 - `GET /api/v1/usage` - 使用统计查询
 - `GET /api/v1/key-info` - API Key信息
 
-### OAuth管理端点
+#### Gemini API端点
+- `POST /gemini/v1/models/{model}:generateContent` - Gemini消息生成
+- `POST /gemini/v1/models/{model}:streamGenerateContent` - Gemini流式生成
+- `GET /gemini/v1/models` - Gemini模型列表
 
+#### OpenAI兼容端点
+- `POST /openai/v1/chat/completions` - OpenAI格式到Claude转换
+- `POST /openai/claude/v1/chat/completions` - OpenAI到Claude专用端点
+- `POST /openai/gemini/v1/chat/completions` - OpenAI到Gemini转换
+- `GET /openai/v1/models` - OpenAI兼容模型列表
+
+#### Azure OpenAI端点
+- `POST /azure/openai/deployments/{deployment}/chat/completions` - Azure OpenAI代理
+
+### Web管理界面
+
+- `GET /` - 根路径重定向到管理界面
+- `GET /admin-next/` - 新版Web管理界面（SPA）
+- `GET /web` - 旧版Web界面重定向
+
+### 管理API端点
+
+#### 账户管理
 - `POST /admin/claude-accounts/generate-auth-url` - 生成OAuth授权URL（含代理）
 - `POST /admin/claude-accounts/exchange-code` - 交换authorization code
 - `POST /admin/claude-accounts` - 创建OAuth账户
+- `GET /admin/claude-accounts` - 获取Claude账户列表
+- `PUT /admin/claude-accounts/{id}` - 更新Claude账户
+- `DELETE /admin/claude-accounts/{id}` - 删除Claude账户
+
+#### API Key管理
+- `GET /admin/api-keys` - 获取API Key列表
+- `POST /admin/api-keys` - 创建新API Key
+- `PUT /admin/api-keys/{id}` - 更新API Key
+- `DELETE /admin/api-keys/{id}` - 删除API Key
+
+#### 用户管理（可选功能）
+- `GET /users/profile` - 获取用户档案
+- `POST /users/login` - 用户登录（支持LDAP）
+- `POST /users/logout` - 用户登出
+
+#### Webhook管理
+- `GET /admin/webhook/config` - 获取Webhook配置
+- `POST /admin/webhook/config` - 更新Webhook配置
+- `POST /admin/webhook/test` - 测试Webhook
 
 ### 系统端点
 
-- `GET /health` - 健康检查
-- `GET /web` - Web管理界面
+- `GET /health` - 健康检查（包含Redis、日志系统状态）
+- `GET /metrics` - 系统指标和统计信息
 - `GET /admin/dashboard` - 系统概览数据
+- `GET /apiStats/overview` - API使用统计概览
 
 ## 故障排除
 
@@ -235,12 +341,32 @@ npm run setup  # 自动生成密钥并创建管理员账户
 
 ### Redis 数据结构
 
+#### 账户管理
 - **API Keys**: `api_key:{id}` (详细信息) + `api_key_hash:{hash}` (快速查找)
 - **Claude 账户**: `claude_account:{id}` (加密的 OAuth 数据)
+- **Claude Console账户**: `claude_console_account:{id}` (claude.ai网站账户)
+- **Gemini 账户**: `gemini_account:{id}` (Google OAuth数据)
+- **Bedrock 账户**: `bedrock_account:{id}` (AWS凭据信息)
+- **Azure OpenAI账户**: `azure_account:{id}` (Azure服务信息)
+- **OpenAI 账户**: `openai_account:{id}` (OpenAI API密钥)
+
+#### 用户和权限
 - **管理员**: `admin:{id}` + `admin_username:{username}` (用户名映射)
+- **用户**: `user:{id}` + `user_username:{username}` (LDAP用户映射)
 - **会话**: `session:{token}` (JWT 会话管理)
+- **管理员凭据**: `admin_credentials` (管理员登录信息)
+
+#### 统计和监控
 - **使用统计**: `usage:daily:{date}:{key}:{model}` (多维度统计)
+- **成本统计**: `cost:daily:{date}:{key}:{model}` (成本追踪)
 - **系统信息**: `system_info` (系统状态缓存)
+- **限流状态**: `rate_limit:{key}:{window}` (API Key限流状态)
+
+#### 账户调度和状态
+- **账户调度**: `scheduler:{platform}:next_account` (下一个可用账户)
+- **账户错误状态**: `account_error:{platform}:{id}` (账户错误追踪)
+- **粘性会话**: `sticky_session:{key}:{platform}` (会话关联)
+- **Token刷新锁**: `token_refresh_lock:{id}` (防止并发刷新)
 
 ### 流式响应处理
 
@@ -252,19 +378,68 @@ npm run setup  # 自动生成密钥并创建管理员账户
 ### CLI 工具使用示例
 
 ```bash
-# 创建新的 API Key
-npm run cli keys create -- --name "MyApp" --limit 1000
+# API Key管理
+npm run cli keys create -- --name "MyApp" --limit 1000  # 创建API Key
+npm run cli keys list                                    # 列出所有API Keys
+npm run cli keys delete -- --id <keyId>                 # 删除API Key
+npm run cli keys usage -- --id <keyId>                  # 查看使用统计
 
-# 查看系统状态
-npm run cli status
+# 系统状态
+npm run cli status                                       # 查看系统状态
+npm run cli stats                                        # 查看统计信息
+npm run cli health                                       # 健康检查
 
-# 管理 Claude 账户
-npm run cli accounts list
-npm run cli accounts refresh <accountId>
+# Claude账户管理
+npm run cli accounts list                                # 列出所有账户
+npm run cli accounts claude list                         # 列出Claude账户
+npm run cli accounts gemini list                         # 列出Gemini账户
+npm run cli accounts refresh <accountId>                 # 刷新指定账户token
+npm run cli accounts test <accountId>                    # 测试账户连接
 
 # 管理员操作
-npm run cli admin create -- --username admin2
-npm run cli admin reset-password -- --username admin
+npm run cli admin create -- --username admin2           # 创建管理员
+npm run cli admin reset-password -- --username admin    # 重置密码
+npm run cli admin login                                  # 管理员登录
+
+# 数据管理
+npm run cli data export                                  # 导出数据
+npm run cli data import -- --file backup.json           # 导入数据
+npm run cli data cleanup                                 # 清理过期数据
+
+# 调试和测试
+npm run cli debug redis                                  # Redis调试信息
+npm run cli debug accounts                               # 账户调试信息
+npm run cli test api -- --key <apiKey>                  # 测试API Key
+npm run cli test account -- --id <accountId>            # 测试账户
+```
+
+### 脚本工具使用
+
+```bash
+# 管理脚本（推荐使用）
+./scripts/manage.sh                                      # 交互式管理菜单
+./scripts/manage.sh install                              # 一键安装
+./scripts/manage.sh start                                # 启动服务
+./scripts/manage.sh stop                                 # 停止服务
+./scripts/manage.sh restart                              # 重启服务
+./scripts/manage.sh status                               # 查看状态
+./scripts/manage.sh update                               # 更新服务
+
+# 监控脚本
+./scripts/monitor-enhanced.sh                            # 增强监控
+./scripts/status-unified.sh                              # 统一状态检查
+./scripts/status-unified.sh --detail                     # 详细状态信息
+
+# 测试脚本
+node scripts/test-gemini-refresh.js                      # 测试Gemini token刷新
+node scripts/test-api-response.js                        # 测试API响应
+node scripts/test-bedrock-models.js                      # 测试Bedrock模型
+node scripts/test-group-scheduling.js                    # 测试分组调度
+
+# 数据迁移脚本
+node scripts/migrate-apikey-expiry.js                    # 迁移API Key过期时间
+node scripts/fix-usage-stats.js                          # 修复使用统计
+node scripts/generate-test-data.js                       # 生成测试数据
 ```
 
 # important-instruction-reminders
@@ -273,3 +448,363 @@ Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User.
+
+
+
+
+
+ 现在我已经读取了三个关键的文件：
+  1. claudeRelayService.js - 核心请求代理服务
+  2. claudeCodeHeadersService.js - Claude Code headers管理  
+  3. unifiedClaudeScheduler.js - 统一的账户调度器
+
+  基于这些代码，我可以完整地回答用户的问题了。让我分析一下：
+
+  关键逻辑分析
+
+  1. 人数控制和均衡人数
+
+  从 unifiedClaudeScheduler.js 可以看出：
+  - 第620-632行：_sortAccountsByPriority() 方法实现了负载均衡
+  - 优先级相同时，按最后使用时间排序（最久未使用的优先）
+  - 这实现了基于优先级的轮询调度
+
+  2. 优先级机制
+
+  - 第455行、504行等：每个账户都有 priority 字段，默认为50
+  - 第623-625行：数字越小优先级越高
+  - 第627-631行：优先级相同时按最后使用时间排序
+
+  3. 并发控制和分发机制
+
+  - 没有直接的并发限制逻辑，但有多种状态管理：
+    - 限流状态 (rate limited)
+    - 过载状态 (overloaded) 
+    - 错误状态 (error, blocked, temp_error)
+    - 额度超额 (quota exceeded)
+
+  4. Token粘性机制
+
+  - 第82-83行：通过 sessionHelper.generateSessionHash(requestBody) 生成会话哈希
+
+  - 第230-261行：检查是否有已映射的账户
+  - 第787-864行：完整的会话映射管理逻辑
+  - 第810-813行：TTL配置，默认1小时
+
+  5. 供应商分发机制
+
+  会话映射和供应商路由是系统的核心调度策略。selectAccountForApiKey() 
+  方法支持多平台分发，包括Claude官方、Claude Console、Bedrock和CCR。系统通过供应商前缀路由实现精细化  
+  的账户分配，确保请求能够精准地路由到最合适的服务提供商。
+
+● 基于这两个文件的代码分析，我来详细解答你的问题：
+
+  🎯 核心调度逻辑分析
+
+  1. 人数控制和均衡策略
+
+  负载均衡实现：unifiedClaudeScheduler.js:620-632 
+  _sortAccountsByPriority(accounts) {
+    return accounts.sort((a, b) => {
+      // 首先按优先级排序（数字越小优先级越高）
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority
+      }
+      // 优先级相同时，按最后使用时间排序（最久未使用的优先）
+      const aLastUsed = new Date(a.lastUsedAt || 0).getTime()
+      const bLastUsed = new Date(b.lastUsedAt || 0).getTime()
+      return aLastUsed - bLastUsed
+    })
+  }
+
+  人数均衡机制：
+  - ✅ 基于优先级的轮询调度：优先级相同的账户会按最后使用时间轮换
+  - ✅ 最少使用优先：lastUsedAt 字段确保最久未使用的账户优先被选择
+  - ✅ 多账户池支持：支持 Claude官方、Claude Console、Bedrock、CCR 多个账户池
+
+  2. 优先级机制详解
+
+  优先级配置：unifiedClaudeScheduler.js:455
+  priority: parseInt(account.priority) || 50  // 默认优先级50
+
+  优先级规则：
+  - 🔢 数字越小优先级越高（1 > 10 > 50）
+  - 🎯 优先级对应调度顺序，不是直接对应人数
+  - ⚖️ 相同优先级内实现负载均衡（按最后使用时间轮换）
+
+  3. 并发处理和供应商分发
+
+  并发超限时的处理逻辑：
+
+  当某个账户遇到问题时，系统会自动切换：
+
+  // claudeRelayService.js:243-254 - 检测到限流时
+  if (isRateLimited) {
+    await unifiedClaudeScheduler.markAccountRateLimited(
+      accountId, accountType, sessionHash, rateLimitResetTimestamp
+    )
+  }
+
+  多供应商分发机制：unifiedClaudeScheduler.js:127-139
+  // 解析供应商前缀
+  const { vendor, baseModel } = parseVendorPrefixedModel(requestedModel)
+
+  // 如果是 CCR 前缀，只在 CCR 账户池中选择
+  if (vendor === 'ccr') {
+    return await this._selectCcrAccount(apiKeyData, sessionHash, effectiveModel)
+  }
+
+  错误状态管理：
+  - 🚫 rate_limited - 429错误自动标记
+  - 🔐 unauthorized - 401错误自动标记
+  - 🚧 blocked - 403错误自动标记
+  - 🔥 overloaded - 529错误自动标记
+  - ⚠️ temp_error - 5xx错误累计标记
+
+  4. Token粘性机制（缓存计算保持）
+
+  会话粘性实现：unifiedClaudeScheduler.js:230-261
+
+  // 检查是否有已映射的账户
+  if (sessionHash) {
+    const mappedAccount = await this._getSessionMapping(sessionHash)
+    if (mappedAccount) {
+      const isAvailable = await this._isAccountAvailable(
+        mappedAccount.accountId, mappedAccount.accountType, effectiveModel
+      )
+      if (isAvailable) {
+        return mappedAccount  // 使用相同账户保持缓存
+      }
+    }
+  }
+
+  粘性配置：unifiedClaudeScheduler.js:810-813
+  const ttlHours = appConfig.session?.stickyTtlHours || 1  // 默认1小时
+  const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
+
+  粘性特点：
+  - 🔄 智能续期：使用频繁时自动延长TTL
+  - 🎯 账户绑定：同一会话始终使用相同账户
+  - 🧹  自动清理：账户不可用时自动清除粘性映射
+
+  💡 回答你的具体问题
+
+  Q1: 如何控制人数和均衡人数？
+
+  - 通过设置账户的 priority 字段控制优先级
+  - 相同优先级账户间自动负载均衡（最少使用优先）
+  - 可以通过账户分组 (group:) 实现专用账户池
+
+  Q2: 优先级是否对应人数？
+
+  - 不是直接对应，优先级控制的是调度顺序
+  - 低优先级数字的账户优先被选择
+  - 相同优先级内通过 lastUsedAt 实现轮换
+
+  Q3: 并发超了怎么处理？
+
+  - 系统会自动检测各种错误状态并标记账户
+  - 不可用账户会被跳过，自动选择其他可用账户
+  - 支持跨供应商分发：可以从 Claude 切换到 Bedrock 等
+
+  Q4: Token粘性是否保持供应商？
+
+  - 是的，会话粘性确保同一 sessionHash 使用相同账户
+  - 这正是为了保持缓存计算的连续性
+  - 默认1小时TTL，可配置延长
+
+  🔧 配置建议
+
+  1. 人数控制：设置不同的 priority 值（1-100）
+  2. 负载均衡：相同优先级的账户会自动轮换
+  3. 并发处理：系统自动容错，无需手动干预
+  4. 缓存保持：会话粘性默认开启，确保计算连续性
+
+  这个架构设计得相当完善，既支持灵活的负载均衡，又保证了会话的连续性。
+
+
+
+
+
+  ================================================================
+
+
+  🔍 多终端场景下的供应商分配深度分析
+
+  基于对核心代码的分析，我来详细回答你关于多终端缓存命中的担忧：
+
+  📋 关键发现：会话哈希生成机制（sessionHelper.js:11-143）      
+
+  会话哈希的生成优先级：
+
+  1. 最高优先级：metadata.user_id 中的 session_xxx
+  2. 次优先级：带有 cache_control: {"type": "ephemeral"} 的内容哈希
+  3. 第三优先级：system 内容哈希
+  4. 兜底策略：第一条消息内容哈希
+
+  🎯 多终端场景分析
+
+  情况1：使用相同提示内容
+
+  // 终端A和终端B使用相同的system内容或缓存内容
+  const sessionHashA = crypto.createHash('sha256').update(systemText).digest('hex').substring(0,      
+  32)
+  const sessionHashB = crypto.createHash('sha256').update(systemText).digest('hex').substring(0,      
+  32)
+  // sessionHashA === sessionHashB ✅ 会命中同一账户
+
+  结果：会使用同一供应商账户 - ✅ 缓存命中
+
+  情况2：使用不同提示内容
+
+  // 终端A：system = "你是AI助手A"
+  // 终端B：system = "你是AI助手B" 
+  // 生成的sessionHash完全不同
+
+  结果：会分配到不同供应商账户 - ❌ 缓存不命中
+
+  🔗 粘性会话机制（unifiedClaudeScheduler.js:230-261）
+
+  // 检查是否有已映射的账户
+  if (sessionHash) {
+    const mappedAccount = await this._getSessionMapping(sessionHash)
+    if (mappedAccount && isAvailable) {
+      // 🎯 使用相同账户保持缓存
+      await this._extendSessionMappingTTL(sessionHash)
+      return mappedAccount  // 相同sessionHash总是返回相同账户
+    }
+  }
+
+  ⚡ 实际场景分析
+
+  场景A：Claude Code 多终端（高概率缓存命中）
+
+  # 所有终端都使用相同的system prompt
+  终端1：system = "你是Claude，Anthropic的AI助手..."
+  终端2：system = "你是Claude，Anthropic的AI助手..."
+  终端3：system = "你是Claude，Anthropic的AI助手..."
+  结果：所有终端 → 相同sessionHash → 相同供应商账户 → ✅ 缓存完美命中
+
+  场景B：不同应用/不同配置（缓存不命中）
+
+  # 不同的system内容
+  SillyTavern：system = "你是角色A，性格活泼..."
+  Cursor：system = "你是代码助手，专门帮助编程..."
+  自定义脚本：system = "你是翻译助手..."
+  结果：不同sessionHash → 不同供应商账户 → ❌ 缓存不命中
+
+  🛠️ 优化建议
+
+  1. 统一Session ID（推荐）
+
+  在多终端使用时主动传入统一的session标识：
+
+  // 所有终端使用相同的user_id
+  const requestBody = {
+    metadata: {
+      user_id: "session_12345678-abcd-1234-5678-123456789abc"  // 36位UUID
+    },
+    // ... 其他内容
+  }
+
+  2. 使用Cache Control标记
+
+  对需要缓存的内容添加ephemeral标记：
+
+  const requestBody = {
+    system: [
+      {
+        type: "text",
+        text: "你是AI助手...",
+        cache_control: { type: "ephemeral" }  // 标记为可缓存
+      }
+    ]
+  }
+
+  📊 TTL和续期机制（unifiedClaudeScheduler.js:810-864）
+
+  // 默认配置
+  const ttlHours = appConfig.session?.stickyTtlHours || 1  // 1小时TTL
+  const renewalThresholdMinutes = appConfig.session?.renewalThresholdMinutes || 0
+
+  // 智能续期：频繁使用时自动延长
+  if (remainingTTL < threshold) {
+    await client.expire(key, fullTTL)  // 续期到完整TTL
+  }
+
+  🎯 最终答案
+
+  对于你的担忧 - "就怕没命中缓存"：
+
+  1. 如果多终端使用相同内容：✅ 会命中同一供应商账户，缓存完美利用
+  2. 如果多终端使用不同内容：❌ 会分配不同账户，缓存无法共享
+
+  关键建议：
+  - 确保所有终端使用统一的system prompt或相同的metadata.user_id
+  - 考虑在客户端配置中设置固定的session标识符
+  - 利用Anthropic的prompt caching机制，添加cache_control标记
+
+  这个设计既保证了缓存的有效利用，又避免了不同会话间的缓存混乱，是一个很好的平衡。
+
+
+
+  
+
+
+
+
+
+
+
+  问题分析
+
+  这个错误 [dumb-init] /usr/local/bin/docker-entrypoint.sh: No such file or directory 说明：
+要将项目中的和目录/usr/local/bin的一起执行sed -i 's/\r$//' docker-entrypoint.sh即可解决
+
+  1. Docker 镜像构建成功了（否则不会到 ENTRYPOINT 这步）
+  2. 但是 docker-entrypoint.sh 文件没有被正确复制到镜像中
+
+  可能的原因
+
+  1. 文件换行符问题（最常见）
+
+  Windows 打包的文件包含 \r\n (CRLF)，Linux 需要 \n (LF)
+
+  2. 文件权限问题
+
+  在 Windows 打包时可能丢失了执行权限
+
+  3. 文件编码问题
+
+  文件可能包含特殊字符或BOM
+
+  请提供这些信息
+
+  在服务器上执行，给我结果：
+
+  # 1. 检查文件是否真的存在
+  ls -la docker-entrypoint.sh
+
+  # 2. 检查文件内容格式（看第一行）
+  head -1 docker-entrypoint.sh | cat -A
+
+  # 3. 检查完整文件格式
+  file docker-entrypoint.sh
+
+  快速修复方案
+
+  如果是换行符问题，执行这个：
+
+  # 修复换行符
+  dos2unix docker-entrypoint.sh
+  # 或者用sed
+  sed -i 's/\r$//' docker-entrypoint.sh
+
+  # 设置权限
+  chmod +x docker-entrypoint.sh
+
+  # 重新构建
+  docker-compose down
+  docker-compose up --build -d
+
+  给我看看检查命令的结果，我就能确定具体问题了。

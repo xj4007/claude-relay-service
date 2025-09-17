@@ -37,6 +37,11 @@ class ClaudeCodeHeadersService {
         needsSpecialHeaders: true,
         needsBetaParam: true,
         needsSpecialRequestBody: true
+      },
+      gaccode: {
+        needsSpecialHeaders: true,
+        needsBetaParam: true,
+        needsSpecialRequestBody: true
       }
       // 未来新增供应商只需要在这里添加配置即可
     }
@@ -214,28 +219,17 @@ class ClaudeCodeHeadersService {
   }
 
   /**
-   * 获取 instcopilot 专用请求头（向后兼容）
-   */
-  getInstcopilotHeaders(accessToken) {
-    return this.getSpecialVendorHeaders(accessToken)
-  }
-
-  /**
-   * 获取 anyrouter 专用请求头
-   */
-  getAnyrouterHeaders(accessToken) {
-    return this.getSpecialVendorHeaders(accessToken)
-  }
-
-  /**
    * 获取特殊供应商专用请求头（通用方法）
    */
   getSpecialVendorHeaders(accessToken) {
     return {
       'x-api-key': accessToken,
       'content-type': 'application/json',
+      'anthropic-version': '2023-06-01',
       'User-Agent': 'claude-cli/1.0.113 (external, cli)',
       'x-app': 'cli',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
       Accept: '*/*',
       Connection: 'keep-alive'
     }
