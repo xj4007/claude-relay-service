@@ -9,74 +9,122 @@ class ClaudeConsoleRelayService {
     this.defaultUserAgent = 'claude-cli/1.0.69 (external, cli)'
   }
 
-  // 🛡️ 错误信息脱敏处理 - 将供应商具体错误转换为通用提示
+  // 🛡️ 错误信息智能脱敏处理 - 供应商错误（含中文）脱敏，官方错误（纯英文）透传
   _sanitizeErrorMessage(statusCode, originalError = '', accountId = '') {
     const timestamp = new Date().toISOString()
 
     // 记录原始错误到日志（用于调试）
     logger.error(
-      `🔍 Original vendor error (Account: ${accountId}, Status: ${statusCode}):`,
+      `🔍 Original error (Account: ${accountId}, Status: ${statusCode}):`,
       originalError
     )
 
-    // 根据状态码返回通用化的错误信息
-    switch (statusCode) {
-      case 401:
-        return {
-          error: {
-            type: 'authentication_error',
-            message: '服务认证失败，系统正在切换账号，请稍后重试'
-          },
-          timestamp
-        }
+    // 解析错误内容为字符串
+    let errorText = ''
+    if (typeof originalError === 'string') {
+      errorText = originalError
+    } else if (originalError && typeof originalError === 'object') {
+      try {
+        errorText = JSON.stringify(originalError)
+      } catch (e) {
+        errorText = String(originalError)
+      }
+    } else {
+      errorText = String(originalError)
+    }
 
-      case 403:
-        return {
-          error: {
-            type: 'permission_error',
-            message: '访问权限不足，系统正在切换账号，请稍后重试'
-          },
-          timestamp
-        }
+    // 🔍 检查是否包含中文字符 - 中文 = 供应商错误，英文 = Claude官方错误
+    const containsChinese = /[\u4e00-\u9fff]/.test(errorText)
 
-      case 429:
-        return {
-          error: {
-            type: 'rate_limit_error',
-            message: '请求频率过高，系统正在切换账号，请稍后重试'
-          },
-          timestamp
-        }
+    if (containsChinese) {
+      // 🛡️ 供应商错误（包含中文）- 使用脱敏处理避免暴露供应商特征
+      logger.info(`🛡️ Vendor error detected (contains Chinese), sanitizing response`)
 
-      case 529:
-        return {
-          error: {
-            type: 'overloaded_error',
-            message: '服务负载过高，系统正在切换账号，请稍后重试'
-          },
-          timestamp
-        }
+      switch (statusCode) {
+        case 401:
+          return {
+            error: {
+              type: 'authentication_error',
+              message: '服务认证失败，请稍后重试'
+            },
+            timestamp
+          }
 
-      case 500:
-      case 502:
-      case 503:
-      case 504:
-        return {
-          error: {
-            type: 'server_error',
-            message: '服务暂时不可用，系统正在切换账号，请稍后重试'
-          },
-          timestamp
-        }
+        case 403:
+          return {
+            error: {
+              type: 'permission_error',
+              message: '访问权限不足，请稍后重试'
+            },
+            timestamp
+          }
 
-      default:
-        return {
-          error: {
-            type: 'service_error',
-            message: '服务出现异常，系统正在切换账号，请稍后重试'
-          },
-          timestamp
+        case 429:
+          return {
+            error: {
+              type: 'rate_limit_error',
+              message: '请求频率过高，请稍后重试'
+            },
+            timestamp
+          }
+
+        case 529:
+          return {
+            error: {
+              type: 'overloaded_error',
+              message: '服务负载过高，系统正在切换账号，请稍后重试'
+            },
+            timestamp
+          }
+
+        case 500:
+        case 502:
+        case 503:
+        case 504:
+          return {
+            error: {
+              type: 'server_error',
+              message: '服务暂时不可用，系统正在切换账号，请稍后重试'
+            },
+            timestamp
+          }
+
+        default:
+          return {
+            error: {
+              type: 'service_error',
+              message: '服务出现异常，请稍后重试'
+            },
+            timestamp
+          }
+      }
+    } else {
+      // 🔍 Claude官方错误（纯英文）- 直接透传，对用户更有帮助
+      logger.info(`🔍 Official Claude error detected (English only), returning original error`)
+
+      // 尝试解析并返回原始错误结构
+      try {
+        const parsedError = typeof originalError === 'string' ? JSON.parse(originalError) : originalError
+
+        // 如果解析成功且有正确的错误结构，直接返回并添加时间戳
+        if (parsedError && typeof parsedError === 'object') {
+          return {
+            ...parsedError,
+            timestamp
+          }
         }
+      } catch (e) {
+        // JSON解析失败，构造标准格式
+      }
+
+      // 构造标准错误格式返回原始英文错误
+      return {
+        error: {
+          type: 'api_error',
+          message: errorText || 'Unknown error occurred'
+        },
+        timestamp
+      }
     }
   }
 
