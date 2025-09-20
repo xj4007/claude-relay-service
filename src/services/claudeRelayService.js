@@ -738,7 +738,7 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.119 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
@@ -1009,7 +1009,7 @@ class ClaudeRelayService {
 
       // 使用统一 User-Agent 或客户端提供的，最后使用默认值
       if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-        const userAgent = unifiedUA || 'claude-cli/1.0.57 (external, cli)'
+        const userAgent = unifiedUA || 'claude-cli/1.0.119 (external, cli)'
         options.headers['User-Agent'] = userAgent
       }
 
@@ -1774,7 +1774,7 @@ class ClaudeRelayService {
 
     // ⚠️ 重要：这里通过正则表达式判断是否为 Claude Code 客户端
     // 如果未来 Claude Code 的 User-Agent 格式发生变化，需要更新这个正则表达式
-    // 当前已知格式：claude-cli/1.0.102 (external, cli)
+    // 当前已知格式：claude-cli/1.0.119 (external, cli)
     const CLAUDE_CODE_UA_PATTERN = /^claude-cli\/[\d.]+\s+\(/i
 
     const clientUA = clientHeaders?.['user-agent'] || clientHeaders?.['User-Agent']
@@ -1807,8 +1807,8 @@ class ClaudeRelayService {
   // 返回 true 表示 newUA 版本更新，需要更新缓存
   compareClaudeCodeVersions(newUA, cachedUA) {
     try {
-      // 提取版本号：claude-cli/1.0.102 (external, cli) -> 1.0.102
-      // 支持多段版本号格式，如 1.0.102、2.1.0.beta1 等
+      // 提取版本号：claude-cli/1.0.119 (external, cli) -> 1.0.119
+      // 支持多段版本号格式，如 1.0.119 、 2.1.0.beta1 等
       const newVersionMatch = newUA.match(/claude-cli\/([\d.]+(?:[a-zA-Z0-9-]*)?)/i)
       const cachedVersionMatch = cachedUA.match(/claude-cli\/([\d.]+(?:[a-zA-Z0-9-]*)?)/i)
 

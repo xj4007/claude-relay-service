@@ -122,7 +122,7 @@ const config = {
         name: 'ClaudeCode',
         description: 'Official Claude Code CLI',
         // 匹配 Claude CLI 的 User-Agent
-        // 示例: claude-cli/1.0.58 (external, cli)
+        // 示例:  claude-cli/1.0.119 (external, cli)
         userAgentPattern: /^claude-cli\/[\d.]+\s+\(/i
       },
       {

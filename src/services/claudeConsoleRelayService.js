@@ -6,7 +6,7 @@ const config = require('../../config/config')
 
 class ClaudeConsoleRelayService {
   constructor() {
-    this.defaultUserAgent = 'claude-cli/1.0.69 (external, cli)'
+    this.defaultUserAgent = 'claude-cli/1.0.119 (external, cli)'
   }
 
   // 🛡️ 错误信息智能脱敏处理 - 供应商错误（含中文）脱敏，官方错误（纯英文）透传
@@ -275,7 +275,7 @@ class ClaudeConsoleRelayService {
           requestHeaders = {
             'x-api-key': account.apiKey,
             'content-type': 'application/json',
-            'User-Agent': 'claude-cli/1.0.113 (external, cli)',
+            'User-Agent': 'claude-cli/1.0.119 (external, cli)',
             'x-app': 'cli',
             Accept: '*/*',
             Connection: 'keep-alive'
@@ -594,7 +594,7 @@ class ClaudeConsoleRelayService {
           requestHeaders = {
             'x-api-key': account.apiKey,
             'content-type': 'application/json',
-            'User-Agent': 'claude-cli/1.0.113 (external, cli)',
+            'User-Agent': 'claude-cli/1.0.119 (external, cli)',
             'x-app': 'cli',
             Accept: '*/*',
             Connection: 'keep-alive'

@@ -20,7 +20,7 @@ const browserFallbackMiddleware = (req, res, next) => {
     req.originalUserAgent = userAgent
 
     // 🆕 关键修改：伪装成claude-cli请求以绕过客户端限制
-    req.headers['user-agent'] = 'claude-cli/1.0.110 (external, cli, browser-fallback)'
+    req.headers['user-agent'] = 'claude-cli/1.0.119 (external, cli)'
 
     // 确保设置正确的认证头
     if (!req.headers['authorization'] && req.headers['x-api-key']) {

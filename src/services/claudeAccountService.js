@@ -239,7 +239,7 @@ class ClaudeAccountService {
           headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json, text/plain, */*',
-            'User-Agent': 'claude-cli/1.0.56 (external, cli)',
+            'User-Agent': 'claude-cli/1.0.119 (external, cli)',
             'Accept-Language': 'en-US,en;q=0.9',
             Referer: 'https://claude.ai/',
             Origin: 'https://claude.ai'
@@ -1519,7 +1519,7 @@ class ClaudeAccountService {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'User-Agent': 'claude-cli/1.0.56 (external, cli)',
+          'User-Agent': 'claude-cli/1.0.119 (external, cli)',
           'Accept-Language': 'en-US,en;q=0.9'
         },
         httpsAgent: agent,
