@@ -965,9 +965,21 @@ class ClaudeConsoleRelayService {
       `🏷️ Processing special vendor request for model: ${model}, isHaiku: ${isHaikuModel}`
     )
 
-    // Haiku 模型：使用标准格式（与其他供应商一样）
+    // Haiku 模型：使用标准格式（与其他供应商一样），但需要确保有system参数
     if (isHaikuModel) {
       logger.info('🏷️ Using standard format for haiku model')
+
+      // 检查并补充system参数
+      if (!body.system) {
+        body.system = [
+          {
+            type: 'text',
+            text: 'Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: \'isNewTopic\' (boolean) and \'title\' (string, or null if isNewTopic is false). Only include these fields, no other text.'
+          }
+        ]
+        logger.info('🏷️ Added default system parameter for haiku model')
+      }
+
       return body
     }
 
@@ -981,33 +993,44 @@ class ClaudeConsoleRelayService {
       // 检查第一个消息是否已经有正确的格式
       if (firstMessage.role === 'user' && Array.isArray(firstMessage.content)) {
         const hasSystemReminder = firstMessage.content.some(
-          (item) => item.type === 'text' && item.text === '<system-reminder></system-reminder>'
+          (item) => item.type === 'text' && item.text && item.text.includes('<system-reminder>')
         )
 
         if (!hasSystemReminder) {
-          // 在第一个消息的 content 数组开头插入 system-reminder
-          firstMessage.content.unshift({
-            type: 'text',
-            text: '<system-reminder></system-reminder>'
-          })
+          // 在第一个消息的 content 数组开头插入两个 system-reminder
+          firstMessage.content.unshift(
+            {
+              type: 'text',
+              text: '<system-reminder>\nThis is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.\n</system-reminder>'
+            },
+            {
+              type: 'text',
+              text: '<system-reminder>\nAs you answer the user\'s questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they\'re absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n'
+            }
+          )
           logger.info(
-            '🏷️ Added system-reminder to first message for special vendor sonnet/opus model'
+            '🏷️ Added two system-reminder objects to first message for special vendor sonnet/opus model'
           )
         }
       } else if (firstMessage.role === 'user' && typeof firstMessage.content === 'string') {
-        // 如果第一个消息是字符串格式，转换为数组格式并添加 system-reminder
+        // 如果第一个消息是字符串格式，转换为数组格式并添加两个 system-reminder
+        const originalContent = firstMessage.content
         firstMessage.content = [
           {
             type: 'text',
-            text: '<system-reminder></system-reminder>'
+            text: '<system-reminder>\nThis is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.\n</system-reminder>'
           },
           {
             type: 'text',
-            text: firstMessage.content
+            text: '<system-reminder>\nAs you answer the user\'s questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they\'re absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n'
+          },
+          {
+            type: 'text',
+            text: originalContent
           }
         ]
         logger.info(
-          '🏷️ Converted first message to array format and added system-reminder for special vendor sonnet/opus model'
+          '🏷️ Converted first message to array format and added two system-reminder objects for special vendor sonnet/opus model'
         )
       }
     }
