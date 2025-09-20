@@ -627,7 +627,7 @@ clientRestrictions: {
 
 ```
 🔓 Authenticated request from key: 测试Key (key-id) in 5ms
-   User-Agent: "claude-cli/1.0.58 (external, cli)"
+   User-Agent: "claude-cli/1.0.119 (external, cli)"
 ```
 
 客户端限制检查日志：
