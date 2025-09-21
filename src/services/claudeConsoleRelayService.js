@@ -1,6 +1,7 @@
 const axios = require('axios')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
+const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 
@@ -14,10 +15,7 @@ class ClaudeConsoleRelayService {
     const timestamp = new Date().toISOString()
 
     // 记录原始错误到日志（用于调试）
-    logger.error(
-      `🔍 Original error (Account: ${accountId}, Status: ${statusCode}):`,
-      originalError
-    )
+    logger.error(`🔍 Original error (Account: ${accountId}, Status: ${statusCode}):`, originalError)
 
     // 解析错误内容为字符串
     let errorText = ''
@@ -104,7 +102,8 @@ class ClaudeConsoleRelayService {
 
       // 尝试解析并返回原始错误结构
       try {
-        const parsedError = typeof originalError === 'string' ? JSON.parse(originalError) : originalError
+        const parsedError =
+          typeof originalError === 'string' ? JSON.parse(originalError) : originalError
 
         // 如果解析成功且有正确的错误结构，直接返回并添加时间戳
         if (parsedError && typeof parsedError === 'object') {
@@ -957,138 +956,14 @@ class ClaudeConsoleRelayService {
       return body
     }
 
-    // 检查模型类型
-    const model = body.model || ''
-    const isHaikuModel = model.toLowerCase().includes('haiku')
-
-    logger.info(
-      `🏷️ Processing special vendor request for model: ${model}, isHaiku: ${isHaikuModel}`
-    )
-
-    // Haiku 模型：使用标准格式（与其他供应商一样），但需要确保有system参数
-    if (isHaikuModel) {
-      logger.info('🏷️ Using standard format for haiku model')
-
-      // 检查并补充system参数
-      if (!body.system) {
-        body.system = [
-          {
-            type: 'text',
-            text: 'Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: \'isNewTopic\' (boolean) and \'title\' (string, or null if isNewTopic is false). Only include these fields, no other text.'
-          }
-        ]
-        logger.info('🏷️ Added default system parameter for haiku model')
-      }
-
-      return body
-    }
-
-    // Sonnet/Opus 模型：处理 system 参数
-    this._processSystemParameter(body)
-
-    // Sonnet/Opus 模型：需要特殊的消息格式
-    if (body.messages && Array.isArray(body.messages) && body.messages.length > 0) {
-      const firstMessage = body.messages[0]
-
-      // 检查第一个消息是否已经有正确的格式
-      if (firstMessage.role === 'user' && Array.isArray(firstMessage.content)) {
-        const hasSystemReminder = firstMessage.content.some(
-          (item) => item.type === 'text' && item.text && item.text.includes('<system-reminder>')
-        )
-
-        if (!hasSystemReminder) {
-          // 在第一个消息的 content 数组开头插入两个 system-reminder
-          firstMessage.content.unshift(
-            {
-              type: 'text',
-              text: '<system-reminder>\nThis is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.\n</system-reminder>'
-            },
-            {
-              type: 'text',
-              text: '<system-reminder>\nAs you answer the user\'s questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they\'re absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n'
-            }
-          )
-          logger.info(
-            '🏷️ Added two system-reminder objects to first message for special vendor sonnet/opus model'
-          )
-        }
-      } else if (firstMessage.role === 'user' && typeof firstMessage.content === 'string') {
-        // 如果第一个消息是字符串格式，转换为数组格式并添加两个 system-reminder
-        const originalContent = firstMessage.content
-        firstMessage.content = [
-          {
-            type: 'text',
-            text: '<system-reminder>\nThis is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.\n</system-reminder>'
-          },
-          {
-            type: 'text',
-            text: '<system-reminder>\nAs you answer the user\'s questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they\'re absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n'
-          },
-          {
-            type: 'text',
-            text: originalContent
-          }
-        ]
-        logger.info(
-          '🏷️ Converted first message to array format and added two system-reminder objects for special vendor sonnet/opus model'
-        )
-      }
-    }
-
-    return body
-  }
-
-  // 🔧 处理 system 参数，确保第一个对象包含指定内容
-  _processSystemParameter(body) {
-    const requiredSystemText = "You are Claude Code, Anthropic's official CLI for Claude."
-
-    if (!body.system) {
-      // 如果没有 system 参数，创建一个
-      body.system = [
-        {
-          type: 'text',
-          text: requiredSystemText
-        }
-      ]
-      logger.info('🏷️ Added system parameter with Claude Code text for special vendor')
-      return
-    }
-
-    if (!Array.isArray(body.system)) {
-      // 如果 system 不是数组，转换为数组格式
-      body.system = [
-        {
-          type: 'text',
-          text: requiredSystemText
-        }
-      ]
-      logger.info('🏷️ Converted system to array format with Claude Code text for special vendor')
-      return
-    }
-
-    if (body.system.length === 0) {
-      // 如果 system 数组为空，添加必需内容
-      body.system.push({
-        type: 'text',
-        text: requiredSystemText
-      })
-      logger.info('🏷️ Added Claude Code text to empty system array for special vendor')
-      return
-    }
-
-    // 检查第一个对象是否包含必需的文本
-    const firstSystemItem = body.system[0]
-    if (firstSystemItem.type === 'text' && firstSystemItem.text === requiredSystemText) {
-      logger.debug('🏷️ System parameter already contains required Claude Code text')
-      return
-    }
-
-    // 如果第一个对象不是必需的内容，在开头插入
-    body.system.unshift({
-      type: 'text',
-      text: requiredSystemText
+    // 使用增强器处理请求体
+    const enhancedBody = claudeCodeRequestEnhancer.enhanceRequest(body, {
+      includeTools: false // 暂时不包含完整的tools定义
     })
-    logger.info('🏷️ Inserted Claude Code text at beginning of system array for special vendor')
+
+    logger.info(`🏷️ Enhanced request body for special vendor using claudeCodeRequestEnhancer`)
+
+    return enhancedBody
   }
 }
 

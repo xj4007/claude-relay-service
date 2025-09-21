@@ -1,0 +1,27 @@
+POST /v1/messages?beta=true HTTP/1.1
+host: new-api.xhm.gd.cn
+connection: keep-alive
+Accept: application/json
+X-Stainless-Retry-Count: 0
+X-Stainless-Timeout: 600
+X-Stainless-Lang: js
+X-Stainless-Package-Version: 0.60.0
+X-Stainless-OS: Windows
+X-Stainless-Arch: x64
+X-Stainless-Runtime: node
+X-Stainless-Runtime-Version: v20.19.1
+anthropic-dangerous-direct-browser-access: true
+anthropic-version: 2023-06-01
+x-api-key: sk-4Yq1HDtSCgGlKX0J9vx2LcogyCVjj5xfVdN6imfYru96PwAh
+x-app: cli
+User-Agent: claude-cli/1.0.120 (external, cli)
+Authorization: Bearer sk-4Yq1HDtSCgGlKX0J9vx2LcogyCVjj5xfVdN6imfYru96PwAh
+content-type: application/json
+anthropic-beta: fine-grained-tool-streaming-2025-05-14
+x-stainless-helper-method: stream
+accept-language: *
+sec-fetch-mode: cors
+accept-encoding: br, gzip, deflate
+content-length: 626
+
+{"model":"claude-3-5-haiku-20241022","max_tokens":512,"messages":[{"role":"user","content":"你能做什么"}],"system":[{"type":"text","text":"Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text."}],"temperature":0,"metadata":{"user_id":"user_161cf9dec4f981e08a0d7971fa065ca51550a8eb87be857651ae40a20dd9a5ed_account__session_3778cc0d-d47f-41fe-b7bd-ab62dc7c16ad"},"stream":true}

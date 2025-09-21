@@ -9,6 +9,7 @@ const sessionHelper = require('../utils/sessionHelper')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
+const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
 const redis = require('../models/redis')
 
 class ClaudeRelayService {
@@ -384,16 +385,24 @@ class ClaudeRelayService {
     }
 
     // 深拷贝请求体
-    const processedBody = JSON.parse(JSON.stringify(body))
+    let processedBody = JSON.parse(JSON.stringify(body))
+
+    // 判断是否是真实的 Claude Code 请求
+    const isRealClaudeCode = this.isRealClaudeCodeRequest(processedBody, clientHeaders)
+
+    // 如果不是真实的 Claude Code 请求，使用增强器补充必需参数
+    if (!isRealClaudeCode) {
+      processedBody = claudeCodeRequestEnhancer.enhanceRequest(processedBody, {
+        includeTools: false // 暂时不包含完整的tools定义
+      })
+      logger.info('🔧 Enhanced request with Claude Code parameters')
+    }
 
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)
 
     // 移除cache_control中的ttl字段
     this._stripTtlFromCacheControl(processedBody)
-
-    // 判断是否是真实的 Claude Code 请求
-    const isRealClaudeCode = this.isRealClaudeCodeRequest(processedBody, clientHeaders)
 
     // 如果不是真实的 Claude Code 请求，需要设置 Claude Code 系统提示词
     if (!isRealClaudeCode) {
@@ -746,9 +755,12 @@ class ClaudeRelayService {
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
 
-      // 使用自定义的 betaHeader 或默认值
+      // 使用增强器提供的动态 betaHeader（根据模型类型）
+      const dynamicBetaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
       const betaHeader =
-        requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
+        requestOptions?.betaHeader !== undefined
+          ? requestOptions.betaHeader
+          : dynamicBetaHeader || this.betaHeader
       if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
@@ -1016,9 +1028,12 @@ class ClaudeRelayService {
       logger.info(
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
-      // 使用自定义的 betaHeader 或默认值
+      // 使用增强器提供的动态 betaHeader（根据模型类型）
+      const dynamicBetaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
       const betaHeader =
-        requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
+        requestOptions?.betaHeader !== undefined
+          ? requestOptions.betaHeader
+          : dynamicBetaHeader || this.betaHeader
       if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
@@ -1565,9 +1580,12 @@ class ClaudeRelayService {
         options.headers['User-Agent'] = userAgent
       }
 
-      // 使用自定义的 betaHeader 或默认值
+      // 使用增强器提供的动态 betaHeader（根据模型类型）
+      const dynamicBetaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
       const betaHeader =
-        requestOptions?.betaHeader !== undefined ? requestOptions.betaHeader : this.betaHeader
+        requestOptions?.betaHeader !== undefined
+          ? requestOptions.betaHeader
+          : dynamicBetaHeader || this.betaHeader
       if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }

@@ -229,7 +229,8 @@ class ClaudeCodeHeadersService {
       'User-Agent': 'claude-cli/1.0.119 (external, cli)',
       'x-app': 'cli',
       'anthropic-dangerous-direct-browser-access': 'true',
-      'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
+      'anthropic-beta':
+        'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
       Accept: '*/*',
       Connection: 'keep-alive'
     }
