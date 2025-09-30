@@ -163,17 +163,17 @@ class ClaudeCodeRequestEnhancer {
     // 4. 补充system参数
     this.ensureClaudeCodeSystem(requestBody)
 
-    // 5. 补充tools参数（使用claudeCodeToolsManager）
-    const enhancedTools = claudeCodeToolsManager.validateAndEnhanceTools(
-      requestBody.tools,
-      modelType
-    )
-    if (enhancedTools !== undefined) {
-      requestBody.tools = enhancedTools
-      logger.debug(
-        `✅ Enhanced tools for ${modelType}: ${enhancedTools ? enhancedTools.length : 0} tools`
-      )
-    }
+    // // 5. 补充tools参数（使用claudeCodeToolsManager）
+    // const enhancedTools = claudeCodeToolsManager.validateAndEnhanceTools(
+    //   requestBody.tools,
+    //   modelType
+    // )
+    // if (enhancedTools !== undefined) {
+    //   requestBody.tools = enhancedTools
+    //   logger.debug(
+    //     `✅ Enhanced tools for ${modelType}: ${enhancedTools ? enhancedTools.length : 0} tools`
+    //   )
+    // }
 
     // 6. 为用户消息添加cache_control
     this.addCacheControl(requestBody.messages)
