@@ -9,20 +9,24 @@ const logger = require('../utils/logger')
 class ClaudeCodeHeadersService {
   constructor() {
     this.defaultHeaders = {
+      connection: 'keep-alive',
+      accept: 'application/json',
       'x-stainless-retry-count': '0',
-      'x-stainless-timeout': '60',
+      'x-stainless-timeout': '600',
       'x-stainless-lang': 'js',
-      'x-stainless-package-version': '0.55.1',
+      'x-stainless-package-version': '0.60.0',
       'x-stainless-os': 'Windows',
       'x-stainless-arch': 'x64',
       'x-stainless-runtime': 'node',
-      'x-stainless-runtime-version': 'v20.19.2',
+      'x-stainless-runtime-version': 'v20.19.1',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
       'user-agent': 'claude-cli/1.0.119 (external, cli)',
       'accept-language': '*',
       'sec-fetch-mode': 'cors',
-      'anthropic-beta': 'claude-code-20250219,fine-grained-tool-streaming-2025-05-14',
+      'accept-encoding': 'br, gzip, deflate',
+      'anthropic-beta':
+        'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
       'x-stainless-helper-method': 'stream'
     }
 
@@ -147,6 +151,27 @@ class ClaudeCodeHeadersService {
   }
 
   /**
+   * 根据模型获取对应的 User-Agent
+   * @param {string} model - 模型名称
+   * @returns {string} User-Agent 字符串
+   */
+  getUserAgentForModel(model) {
+    if (!model || typeof model !== 'string') {
+      return 'claude-cli/2.0.1 (external, cli)' // 默认使用最新版本
+    }
+
+    const modelLower = model.toLowerCase()
+
+    // 精确匹配 Sonnet 4 的特定日期版本
+    if (modelLower.includes('claude-sonnet-4-20250514')) {
+      return 'claude-cli/1.0.119 (external, cli)'
+    }
+
+    // 所有其他情况（Sonnet 4.5+、Sonnet 5+、Opus、Haiku 等）使用最新版本
+    return 'claude-cli/2.0.1 (external, cli)'
+  }
+
+  /**
    * 从客户端 headers 中提取 Claude Code 相关的 headers
    */
   extractClaudeCodeHeaders(clientHeaders) {
@@ -238,8 +263,11 @@ class ClaudeCodeHeadersService {
 
   /**
    * 获取账号的 Claude Code headers
+   * @param {string} accountId - 账户ID
+   * @param {object} account - 账户对象
+   * @param {string} model - 请求的模型名称（用于动态设置 User-Agent）
    */
-  async getAccountHeaders(accountId, account = null) {
+  async getAccountHeaders(accountId, account = null, model = null) {
     try {
       // 检测是否是特殊供应商
       const specialVendor = this.detectSpecialVendor(account)
@@ -256,20 +284,37 @@ class ClaudeCodeHeadersService {
       const key = `claude_code_headers:${accountId}`
       const data = await redis.getClient().get(key)
 
+      let headers
       if (data) {
         const parsed = JSON.parse(data)
+        headers = { ...parsed.headers }
         logger.debug(
           `📋 Retrieved Claude Code headers for account ${accountId}, version: ${parsed.version}`
         )
-        return parsed.headers
+      } else {
+        // 使用默认 headers
+        headers = { ...this.defaultHeaders }
+        logger.debug(`📋 Using default Claude Code headers for account ${accountId}`)
       }
 
-      // 返回默认 headers
-      logger.debug(`📋 Using default Claude Code headers for account ${accountId}`)
-      return this.defaultHeaders
+      // 如果提供了模型参数，根据模型动态设置 User-Agent
+      if (model) {
+        const userAgent = this.getUserAgentForModel(model)
+        headers['user-agent'] = userAgent
+        logger.debug(`🔄 Set User-Agent for model ${model}: ${userAgent}`)
+      }
+
+      return headers
     } catch (error) {
       logger.error(`❌ Failed to get Claude Code headers for account ${accountId}:`, error)
-      return this.defaultHeaders
+      const headers = { ...this.defaultHeaders }
+
+      // 即使出错，也尝试根据模型设置正确的 User-Agent
+      if (model) {
+        headers['user-agent'] = this.getUserAgentForModel(model)
+      }
+
+      return headers
     }
   }
 

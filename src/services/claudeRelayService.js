@@ -709,8 +709,12 @@ class ClaudeRelayService {
     const finalHeaders = { ...filteredHeaders }
 
     if (!isRealClaudeCode) {
-      // 获取该账号存储的 Claude Code headers
-      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(accountId)
+      // 获取该账号存储的 Claude Code headers，传入 model 参数以动态设置 User-Agent
+      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+        accountId,
+        account,
+        body.model
+      )
 
       // 只添加客户端没有提供的 headers
       Object.keys(claudeCodeHeaders).forEach((key) => {
@@ -989,8 +993,12 @@ class ClaudeRelayService {
     const finalHeaders = { ...filteredHeaders }
 
     if (!isRealClaudeCode) {
-      // 获取该账号存储的 Claude Code headers
-      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(accountId)
+      // 获取该账号存储的 Claude Code headers，传入 model 参数以动态设置 User-Agent
+      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+        accountId,
+        account,
+        body.model
+      )
 
       // 只添加客户端没有提供的 headers
       Object.keys(claudeCodeHeaders).forEach((key) => {

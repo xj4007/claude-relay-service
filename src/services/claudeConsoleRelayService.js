@@ -252,12 +252,10 @@ class ClaudeConsoleRelayService {
       const filteredHeaders = this._filterClientHeaders(clientHeaders)
       logger.debug(`[DEBUG] Filtered client headers: ${JSON.stringify(filteredHeaders)}`)
 
-      // 决定使用的 User-Agent：优先使用账户自定义的，否则透传客户端的，最后才使用默认值
+      // 决定使用的 User-Agent：优先使用账户自定义的，否则根据模型动态生成
       const userAgent =
         account.userAgent ||
-        clientHeaders?.['user-agent'] ||
-        clientHeaders?.['User-Agent'] ||
-        this.defaultUserAgent
+        claudeCodeHeadersService.getUserAgentForModel(modifiedRequestBody.model)
 
       // 构建请求头，对特殊供应商特殊处理
       let requestHeaders
@@ -571,12 +569,10 @@ class ClaudeConsoleRelayService {
       const filteredHeaders = this._filterClientHeaders(clientHeaders)
       logger.debug(`[DEBUG] Filtered client headers: ${JSON.stringify(filteredHeaders)}`)
 
-      // 决定使用的 User-Agent：优先使用账户自定义的，否则透传客户端的，最后才使用默认值
+      // 决定使用的 User-Agent：优先使用账户自定义的，否则根据模型动态生成
       const userAgent =
         account.userAgent ||
-        clientHeaders?.['user-agent'] ||
-        clientHeaders?.['User-Agent'] ||
-        this.defaultUserAgent
+        claudeCodeHeadersService.getUserAgentForModel(modifiedRequestBody.model)
 
       // 构建请求头，对特殊供应商特殊处理
       let requestHeaders

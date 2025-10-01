@@ -213,8 +213,17 @@ async function handleChatCompletion(req, res, apiKeyData) {
     )
     const { accountId } = accountSelection
 
-    // 获取该账号存储的 Claude Code headers
-    const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(accountId)
+    // 获取账户信息（用于特殊供应商检测）
+    const account =
+      accountSelection.account ||
+      (await require('../services/claudeAccountService').getAccount(accountId))
+
+    // 获取该账号存储的 Claude Code headers，传入 model 参数以动态设置 User-Agent
+    const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+      accountId,
+      account,
+      claudeRequest.model
+    )
 
     logger.debug(`📋 Using Claude Code headers for account ${accountId}:`, {
       userAgent: claudeCodeHeaders['user-agent']
