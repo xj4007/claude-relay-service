@@ -808,3 +808,5 @@ NEVER proactively create documentation files (\*.md) or README files. Only creat
   docker-compose up --build -d
 
   给我看看检查命令的结果，我就能确定具体问题了。
+  有修改过前端就在本地执行 
+  npm run build:web             # 构建Web管理界面
