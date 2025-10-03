@@ -385,9 +385,9 @@ class ClaudeRelayService {
       const claudeCodePrompt = {
         type: 'text',
         text: this.claudeCodeSystemPrompt,
-        cache_control: {
-          type: 'ephemeral'
-        }
+        // cache_control: {
+        //   type: 'ephemeral'
+        // }
       }
 
       if (processedBody.system) {

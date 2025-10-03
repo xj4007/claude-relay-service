@@ -571,8 +571,7 @@ class ClaudeConsoleRelayService {
 
       // 决定使用的 User-Agent：优先使用账户自定义的，否则根据模型动态生成
       const userAgent =
-        account.userAgent ||
-        claudeCodeHeadersService.getUserAgentForModel(modifiedRequestBody.model)
+        account.userAgent || claudeCodeHeadersService.getUserAgentForModel(body.model)
 
       // 构建请求头，对特殊供应商特殊处理
       let requestHeaders

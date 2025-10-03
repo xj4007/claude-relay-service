@@ -20,7 +20,7 @@ class ClaudeCodeRequestEnhancer {
     this.claudeCodeSystemBase = {
       type: 'text',
       text: "You are Claude Code, Anthropic's official CLI for Claude.",
-      cache_control: { type: 'ephemeral' }
+      // cache_control: { type: 'ephemeral' }
     }
 
     // system-reminder消息模板
@@ -145,7 +145,7 @@ class ClaudeCodeRequestEnhancer {
 
     // 1. 补充max_tokens
     if (!requestBody.max_tokens) {
-      requestBody.max_tokens = 32000
+      requestBody.max_tokens = 31000 //32000
       logger.debug('✅ Added max_tokens: 32000 for Sonnet/Opus')
     }
 
@@ -236,7 +236,7 @@ class ClaudeCodeRequestEnhancer {
         {
           type: 'text',
           text: '\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously.',
-          cache_control: { type: 'ephemeral' }
+          // cache_control: { type: 'ephemeral' }
         }
       ]
       logger.debug('✅ Added Claude Code system parameter')
@@ -253,7 +253,7 @@ class ClaudeCodeRequestEnhancer {
       // 确保system项有cache_control
       requestBody.system.forEach((item) => {
         if (item.type === 'text' && !item.cache_control) {
-          item.cache_control = { type: 'ephemeral' }
+          // item.cache_control = { type: 'ephemeral' }
         }
       })
     }
@@ -267,22 +267,22 @@ class ClaudeCodeRequestEnhancer {
       return
     }
 
-    // 找到最后一条用户消息
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        const userMsg = messages[i]
+    // // 找到最后一条用户消息
+    // for (let i = messages.length - 1; i >= 0; i--) {
+    //   if (messages[i].role === 'user') {
+    //     const userMsg = messages[i]
 
-        // 处理content数组
-        if (Array.isArray(userMsg.content)) {
-          const lastContent = userMsg.content[userMsg.content.length - 1]
-          if (lastContent && lastContent.type === 'text' && !lastContent.cache_control) {
-            lastContent.cache_control = { type: 'ephemeral' }
-            logger.debug('✅ Added cache_control to last user message')
-          }
-        }
-        break
-      }
-    }
+    //     // 处理content数组
+    //     if (Array.isArray(userMsg.content)) {
+    //       const lastContent = userMsg.content[userMsg.content.length - 1]
+    //       if (lastContent && lastContent.type === 'text' && !lastContent.cache_control) {
+    //         lastContent.cache_control = { type: 'ephemeral' }
+    //         logger.debug('✅ Added cache_control to last user message')
+    //       }
+    //     }
+    //     break
+    //   }
+    // }
   }
 
   /**
