@@ -3,6 +3,7 @@ const zlib = require('zlib')
 const fs = require('fs')
 const path = require('path')
 const ProxyHelper = require('../utils/proxyHelper')
+const IntelligentErrorFilter = require('../utils/intelligentErrorFilter')
 const claudeAccountService = require('./claudeAccountService')
 const unifiedClaudeScheduler = require('./unifiedClaudeScheduler')
 const sessionHelper = require('../utils/sessionHelper')
@@ -1102,15 +1103,16 @@ class ClaudeRelayService {
               errorData
             )
             if (!responseStream.destroyed) {
-              // 发送错误事件
+              // 使用智能过滤器处理错误
+              const filteredError = IntelligentErrorFilter.filterStreamError(
+                res.statusCode,
+                errorData
+              )
+
+              // 发送过滤后的错误事件
               responseStream.write('event: error\n')
               responseStream.write(
-                `data: ${JSON.stringify({
-                  error: 'Claude API error',
-                  status: res.statusCode,
-                  details: errorData,
-                  timestamp: new Date().toISOString()
-                })}\n\n`
+                `data: ${JSON.stringify(filteredError)}\n\n`
               )
               responseStream.end()
             }

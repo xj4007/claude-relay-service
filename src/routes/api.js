@@ -9,6 +9,7 @@ const apiKeyService = require('../services/apiKeyService')
 const pricingService = require('../services/pricingService')
 const { authenticateApiKey } = require('../middleware/auth')
 const logger = require('../utils/logger')
+const IntelligentErrorFilter = require('../utils/intelligentErrorFilter')
 const redis = require('../models/redis')
 const { getEffectiveModel, parseVendorPrefixedModel } = require('../utils/modelHelper')
 const sessionHelper = require('../utils/sessionHelper')
@@ -608,6 +609,25 @@ async function handleMessagesRequest(req, res) {
         headers: JSON.stringify(response.headers),
         bodyLength: response.body ? response.body.length : 0
       })
+
+      // 检查是否是错误响应，需要进行智能过滤
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        // 使用智能过滤器处理错误
+        const filteredError = IntelligentErrorFilter.filterError(
+          response.statusCode,
+          response.body
+        )
+
+        // 记录原始错误（仅在日志中）
+        logger.error('Claude API error response:', {
+          statusCode: response.statusCode,
+          accountId: response.accountId,
+          originalError: response.body?.substring ? response.body.substring(0, 500) : response.body
+        })
+
+        // 返回过滤后的错误
+        return res.status(response.statusCode).json(filteredError)
+      }
 
       res.status(response.statusCode)
 
