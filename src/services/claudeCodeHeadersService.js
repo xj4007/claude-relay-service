@@ -245,20 +245,44 @@ class ClaudeCodeHeadersService {
 
   /**
    * 获取特殊供应商专用请求头（通用方法）
+   * @param {string} accessToken - 访问令牌
+   * @param {string} model - 模型名称（用于动态设置 User-Agent 和 anthropic-beta）
    */
-  getSpecialVendorHeaders(accessToken) {
-    return {
-      'x-api-key': accessToken,
+  getSpecialVendorHeaders(accessToken, model) {
+    // 根据模型动态获取正确的 beta header
+    const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
+    const betaHeader = model
+      ? claudeCodeRequestEnhancer.getBetaHeader(model)
+      : 'fine-grained-tool-streaming-2025-05-14'
+
+    const headers = {
+      // 认证
+      Authorization: `Bearer ${accessToken}`,
+      // 基础 headers
       'content-type': 'application/json',
       'anthropic-version': '2023-06-01',
-      'User-Agent': 'claude-cli/1.0.119 (external, cli)',
+      'User-Agent': model ? this.getUserAgentForModel(model) : 'claude-cli/2.0.1 (external, cli)',
+      Accept: 'application/json',
+      Connection: 'keep-alive',
+      // Claude Code 特有 headers
       'x-app': 'cli',
       'anthropic-dangerous-direct-browser-access': 'true',
-      'anthropic-beta':
-        'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
-      Accept: '*/*',
-      Connection: 'keep-alive'
+      'anthropic-beta': betaHeader, // 根据模型类型动态设置
+      'x-stainless-helper-method': 'stream',
+      'accept-language': '*',
+      'sec-fetch-mode': 'cors',
+      // X-Stainless 系列
+      'x-stainless-retry-count': '0',
+      'x-stainless-timeout': '600',
+      'x-stainless-lang': 'js',
+      'x-stainless-package-version': '0.60.0',
+      'x-stainless-os': 'Windows',
+      'x-stainless-arch': 'x64',
+      'x-stainless-runtime': 'node',
+      'x-stainless-runtime-version': 'v20.19.1'
     }
+
+    return headers
   }
 
   /**

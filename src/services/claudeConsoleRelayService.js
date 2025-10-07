@@ -15,7 +15,26 @@ class ClaudeConsoleRelayService {
     const timestamp = new Date().toISOString()
 
     // 记录原始错误到日志（用于调试）
-    logger.error(`🔍 Original error (Account: ${accountId}, Status: ${statusCode}):`, originalError)
+    logger.error(`🔍 Original error (Account: ${accountId}, Status: ${statusCode}):`)
+    logger.error(`📋 Error type: ${typeof originalError}`)
+    logger.error(`📋 Error length: ${originalError?.length || 'N/A'}`)
+
+    // 根据类型打印详细信息
+    if (typeof originalError === 'string') {
+      logger.error(`📋 Error string (first 2000 chars):`)
+      logger.error(originalError.substring(0, 2000))
+    } else if (typeof originalError === 'object' && originalError !== null) {
+      try {
+        const jsonStr = JSON.stringify(originalError, null, 2)
+        logger.error(`📋 Error object JSON (first 2000 chars):`)
+        logger.error(jsonStr.substring(0, 2000))
+      } catch (e) {
+        logger.error('📋 Error stringify failed:', e.message)
+        logger.error('📋 Error toString:', String(originalError).substring(0, 2000))
+      }
+    } else {
+      logger.error('📋 Error value:', originalError)
+    }
 
     // 解析错误内容为字符串
     let errorText = ''
@@ -263,32 +282,48 @@ class ClaudeConsoleRelayService {
         // 特殊供应商使用专用请求头
         const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
         try {
-          requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
+          requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(
+            account.apiKey,
+            modifiedRequestBody.model
+          )
           logger.info(
             `🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console request`
           )
         } catch (error) {
           // 如果方法失败，使用手动构建的请求头
+          const betaHeader = claudeCodeRequestEnhancer.getBetaHeader(modifiedRequestBody.model)
+
           requestHeaders = {
-            'x-api-key': account.apiKey,
+            Authorization: `Bearer ${account.apiKey}`,
             'content-type': 'application/json',
-            'User-Agent': 'claude-cli/1.0.119 (external, cli)',
+            'anthropic-version': '2023-06-01',
+            'User-Agent': userAgent,
             'x-app': 'cli',
-            Accept: '*/*',
+            'anthropic-dangerous-direct-browser-access': 'true',
+            'anthropic-beta': betaHeader,
+            Accept: 'application/json',
             Connection: 'keep-alive'
           }
           logger.warn(
-            `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers, using manual headers:`,
+            `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers, using manual headers with beta: ${betaHeader}:`,
             error.message
           )
         }
       } else {
-        // 标准请求头
+        // ✅ 使用 claudeCodeHeadersService 获取完整的 Claude Code headers
+        const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+          accountId,
+          account,
+          modifiedRequestBody.model
+        )
+
+        // 标准请求头：合并 Claude Code headers
         requestHeaders = {
           'Content-Type': 'application/json',
           'anthropic-version': '2023-06-01',
           'User-Agent': userAgent,
-          ...filteredHeaders
+          ...claudeCodeHeaders, // ✅ 添加完整的 Claude Code headers
+          ...filteredHeaders // 保留客户端的其他 headers
         }
 
         // 根据 API Key 格式选择认证方式
@@ -546,67 +581,93 @@ class ClaudeConsoleRelayService {
     streamTransformer = null,
     requestOptions = {}
   ) {
-    return new Promise((resolve, reject) => {
-      let aborted = false
+    // 构建完整的API URL
+    const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
+    let apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
 
-      // 构建完整的API URL
-      const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
-      let apiEndpoint = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
+    // 为特殊供应商添加 beta=true 查询参数
+    if (claudeCodeHeadersService.needsBetaParam(account)) {
+      const separator = apiEndpoint.includes('?') ? '&' : '?'
+      apiEndpoint += `${separator}beta=true`
+      const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+      logger.info(
+        `🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} stream account: ${account.name}`
+      )
+    }
 
-      // 为特殊供应商添加 beta=true 查询参数
-      if (claudeCodeHeadersService.needsBetaParam(account)) {
-        const separator = apiEndpoint.includes('?') ? '&' : '?'
-        apiEndpoint += `${separator}beta=true`
-        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
-        logger.info(
-          `🔧 Added beta=true parameter for ${vendorInfo?.vendorName || 'special'} stream account: ${account.name}`
+    logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
+
+    // 过滤客户端请求头
+    const filteredHeaders = this._filterClientHeaders(clientHeaders)
+    logger.debug(`[DEBUG] Filtered client headers: ${JSON.stringify(filteredHeaders)}`)
+
+    // 决定使用的 User-Agent：优先使用账户自定义的，否则根据模型动态生成
+    const userAgent = account.userAgent || claudeCodeHeadersService.getUserAgentForModel(body.model)
+
+    // 构建请求头，对特殊供应商特殊处理
+    let requestHeaders
+    if (claudeCodeHeadersService.needsSpecialHeaders(account)) {
+      // 特殊供应商使用专用请求头
+      const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
+      try {
+        requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(
+          account.apiKey,
+          body.model
         )
-      }
+        logger.info(
+          `🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console stream request`
+        )
+      } catch (error) {
+        // 如果方法失败，使用手动构建的请求头
+        const betaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
 
-      logger.debug(`🎯 Final API endpoint for stream: ${apiEndpoint}`)
-
-      // 过滤客户端请求头
-      const filteredHeaders = this._filterClientHeaders(clientHeaders)
-      logger.debug(`[DEBUG] Filtered client headers: ${JSON.stringify(filteredHeaders)}`)
-
-      // 决定使用的 User-Agent：优先使用账户自定义的，否则根据模型动态生成
-      const userAgent =
-        account.userAgent || claudeCodeHeadersService.getUserAgentForModel(body.model)
-
-      // 构建请求头，对特殊供应商特殊处理
-      let requestHeaders
-      if (claudeCodeHeadersService.needsSpecialHeaders(account)) {
-        // 特殊供应商使用专用请求头
-        const vendorInfo = claudeCodeHeadersService.detectSpecialVendor(account)
-        try {
-          requestHeaders = claudeCodeHeadersService.getSpecialVendorHeaders(account.apiKey)
-          logger.info(
-            `🏷️ Using ${vendorInfo?.vendorName || 'special'} vendor headers for Claude Console stream request`
-          )
-        } catch (error) {
-          // 如果方法失败，使用手动构建的请求头
-          requestHeaders = {
-            'x-api-key': account.apiKey,
-            'content-type': 'application/json',
-            'User-Agent': 'claude-cli/1.0.119 (external, cli)',
-            'x-app': 'cli',
-            Accept: '*/*',
-            Connection: 'keep-alive'
-          }
-          logger.warn(
-            `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers in stream, using manual headers:`,
-            error.message
-          )
-        }
-      } else {
-        // 标准请求头
         requestHeaders = {
-          'Content-Type': 'application/json',
+          Authorization: `Bearer ${account.apiKey}`,
+          'content-type': 'application/json',
           'anthropic-version': '2023-06-01',
           'User-Agent': userAgent,
-          ...filteredHeaders
+          'x-app': 'cli',
+          'anthropic-dangerous-direct-browser-access': 'true',
+          'anthropic-beta': betaHeader,
+          Accept: 'application/json',
+          Connection: 'keep-alive'
         }
+        logger.warn(
+          `⚠️ Failed to get ${vendorInfo?.vendorName || 'special'} vendor headers in stream, using manual headers with beta: ${betaHeader}:`,
+          error.message
+        )
       }
+    } else {
+      // ✅ 使用 claudeCodeHeadersService 获取完整的 Claude Code headers
+      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+        accountId,
+        account,
+        body.model
+      )
+
+      // 标准请求头：合并 Claude Code headers
+      requestHeaders = {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'User-Agent': userAgent,
+        ...claudeCodeHeaders, // ✅ 添加完整的 Claude Code headers
+        ...filteredHeaders // 保留客户端的其他 headers
+      }
+
+      // 根据 API Key 格式选择认证方式
+      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+        // Anthropic 官方 API Key 使用 x-api-key
+        requestHeaders['x-api-key'] = account.apiKey
+        logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key in stream')
+      } else {
+        // 其他 API Key 使用 Authorization Bearer
+        requestHeaders['Authorization'] = `Bearer ${account.apiKey}`
+        logger.debug('[DEBUG] Using Authorization Bearer authentication in stream')
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      let aborted = false
 
       // 准备请求配置
       const requestConfig = {
@@ -618,19 +679,6 @@ class ClaudeConsoleRelayService {
         timeout: config.requestTimeout || 600000,
         responseType: 'stream',
         validateStatus: () => true // 接受所有状态码
-      }
-
-      // 根据 API Key 格式选择认证方式（非特殊供应商账户）
-      if (!claudeCodeHeadersService.needsSpecialHeaders(account)) {
-        if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
-          // Anthropic 官方 API Key 使用 x-api-key
-          requestConfig.headers['x-api-key'] = account.apiKey
-          logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
-        } else {
-          // 其他 API Key 使用 Authorization Bearer
-          requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
-          logger.debug('[DEBUG] Using Authorization Bearer authentication')
-        }
       }
 
       // 添加beta header如果需要
@@ -670,6 +718,10 @@ class ClaudeConsoleRelayService {
             })
 
             response.data.on('end', () => {
+              // 📋 详细记录原始错误内容（用于调试）
+              logger.error(`📋 Raw error response from vendor (Status ${response.status}):`)
+              logger.error(errorData.substring(0, 2000)) // 最多输出2000字符
+
               // 使用脱敏处理发送错误
               this._sendSanitizedStreamError(responseStream, response.status, errorData, accountId)
               resolve() // 不抛出异常，正常完成流处理
@@ -880,18 +932,13 @@ class ClaudeConsoleRelayService {
 
   // 🔧 过滤客户端请求头
   _filterClientHeaders(clientHeaders) {
+    // 只移除真正敏感的 headers，保留 Claude Code 相关的 headers
     const sensitiveHeaders = [
-      'content-type',
-      'user-agent',
-      'authorization',
-      'x-api-key',
-      'host',
-      'content-length',
-      'connection',
-      'proxy-authorization',
-      'content-encoding',
-      'transfer-encoding',
-      'anthropic-version'
+      'authorization', // 移除客户端的，使用账户的
+      'x-api-key', // 移除客户端的，使用账户的
+      'host', // 由axios自动设置
+      'content-length', // 由axios自动计算
+      'proxy-authorization' // 代理相关
     ]
 
     const filteredHeaders = {}

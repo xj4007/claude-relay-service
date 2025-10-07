@@ -19,7 +19,7 @@ class ClaudeCodeRequestEnhancer {
     // Sonnet/Opus的Claude Code system参数
     this.claudeCodeSystemBase = {
       type: 'text',
-      text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      text: "You are Claude Code, Anthropic's official CLI for Claude."
       // cache_control: { type: 'ephemeral' }
     }
 
@@ -235,7 +235,7 @@ class ClaudeCodeRequestEnhancer {
         this.claudeCodeSystemBase,
         {
           type: 'text',
-          text: '\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously.',
+          text: '\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously.'
           // cache_control: { type: 'ephemeral' }
         }
       ]
