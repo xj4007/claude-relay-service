@@ -142,6 +142,11 @@ class ClaudeConsoleAccountService {
       const accounts = []
 
       for (const key of keys) {
+        // 🔧 跳过非账户键（如 slow_responses、temp_error 等辅助数据）
+        if (key.includes(':slow_responses') || key.includes(':temp_error')) {
+          continue
+        }
+
         const accountData = await client.hgetall(key)
         if (accountData && Object.keys(accountData).length > 0) {
           // 获取限流状态信息

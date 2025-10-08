@@ -262,10 +262,10 @@ class ClaudeConsoleRelayService {
               `⏰ Upstream timeout after ${totalWaitTime}ms (waited ${waitTime}ms after client disconnect), aborting request | Acc: ${account.name}`
             )
 
-            // 🏷️ 标记账户响应慢（降低优先级，但不完全禁用）
-            claudeConsoleAccountService.markAccountSlow(accountId, totalWaitTime).catch((err) => {
-              logger.error(`Failed to mark account as slow: ${err.message}`)
-            })
+            // ⚠️ 不降级：这是客户端提前断开导致的，不是上游慢
+            logger.info(
+              `ℹ️ Not marking account as slow - client disconnected before upstream could respond | Acc: ${account.name}`
+            )
 
             abortController.abort()
           }
