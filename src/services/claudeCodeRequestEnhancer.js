@@ -5,22 +5,41 @@
 
 const logger = require('../utils/logger')
 const claudeCodeToolsManager = require('./claudeCodeToolsManager')
+const { promptMap } = require('../utils/contents')
 
 class ClaudeCodeRequestEnhancer {
   constructor() {
-    // Haiku模型的默认system参数
+    // Haiku模型的默认system参数（从 contents.js 获取）
     this.haikuDefaultSystem = [
       {
         type: 'text',
-        text: "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text."
+        text: promptMap.haikuSystemPrompt
       }
     ]
 
-    // Sonnet/Opus的Claude Code system参数
+    // Sonnet/Opus的Claude Code system参数（从 contents.js 获取）
     this.claudeCodeSystemBase = {
       type: 'text',
-      text: "You are Claude Code, Anthropic's official CLI for Claude."
+      text: promptMap.claudeOtherSystemPrompt1
       // cache_control: { type: 'ephemeral' }
+    }
+
+    // 完整的Claude Code详细指令（从 contents.js 获取）
+    this.claudeCodeDetailedInstructions = {
+      type: 'text',
+      text: promptMap.claudeOtherSystemPrompt2
+      // cache_control: { type: 'ephemeral' }
+    }
+
+    // Agent SDK 相关提示词（未来可能需要）
+    this.agentSdkPrompt = {
+      type: 'text',
+      text: promptMap.claudeOtherSystemPrompt3
+    }
+
+    this.agentSdkClaudeCodePrompt = {
+      type: 'text',
+      text: promptMap.claudeOtherSystemPrompt4
     }
 
     // system-reminder消息模板
@@ -226,20 +245,16 @@ class ClaudeCodeRequestEnhancer {
   }
 
   /**
-   * 确保包含Claude Code的system参数
+   * 确保包含Claude Code的system参数（使用 contents.js 的完整指令）
    */
   ensureClaudeCodeSystem(requestBody) {
     if (!requestBody.system) {
-      // 创建完整的system数组
+      // 创建完整的system数组（使用 contents.js 的完整 Claude Code 指令）
       requestBody.system = [
         this.claudeCodeSystemBase,
-        {
-          type: 'text',
-          text: '\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously.'
-          // cache_control: { type: 'ephemeral' }
-        }
+        this.claudeCodeDetailedInstructions
       ]
-      logger.debug('✅ Added Claude Code system parameter')
+      logger.debug('✅ Added complete Claude Code system parameters from contents.js')
     } else if (Array.isArray(requestBody.system)) {
       // 检查是否包含Claude Code标识
       const hasClaudeCode = requestBody.system.some(
@@ -247,7 +262,7 @@ class ClaudeCodeRequestEnhancer {
       )
       if (!hasClaudeCode) {
         requestBody.system.unshift(this.claudeCodeSystemBase)
-        logger.debug('✅ Added Claude Code identifier to system')
+        logger.debug('✅ Added Claude Code identifier to system from contents.js')
       }
 
       // 确保system项有cache_control
