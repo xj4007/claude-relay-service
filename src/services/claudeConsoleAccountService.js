@@ -718,14 +718,119 @@ class ClaudeConsoleAccountService {
 
       await client.hdel(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, 'overloadedAt', 'overloadStatus')
 
-      logger.success(`✅ Overload status removed for Claude Console account: ${accountId}`)
+      logger.info(`✅ Removed overload status for Claude Console account: ${accountId}`)
       return { success: true }
     } catch (error) {
-      logger.error(
-        `❌ Failed to remove overload status for Claude Console account: ${accountId}`,
-        error
-      )
+      logger.error(`❌ Failed to remove overload status: ${accountId}`, error)
       throw error
+    }
+  }
+
+  // 🐌 标记账户响应慢（降低优先级但不禁用）
+  async markAccountSlow(accountId, responseTime) {
+    try {
+      const client = redis.getClientSafe()
+      const account = await this.getAccount(accountId)
+
+      if (!account) {
+        return { success: false, error: 'Account not found' }
+      }
+
+      // 记录慢响应事件
+      const slowKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:slow_responses`
+      const now = Date.now()
+      const oneHourAgo = now - 60 * 60 * 1000
+
+      // 添加当前慢响应记录（带时间戳和响应时间）
+      await client.zadd(slowKey, now, `${now}:${responseTime}`)
+
+      // 清理1小时前的记录
+      await client.zremrangebyscore(slowKey, '-inf', oneHourAgo)
+
+      // 设置过期时间（2小时）
+      await client.expire(slowKey, 7200)
+
+      // 统计1小时内的慢响应次数
+      const slowCount = await client.zcard(slowKey)
+
+      logger.info(
+        `🐌 Recorded slow response for account ${account.name}: ${responseTime}ms (${slowCount} slow responses in last hour)`
+      )
+
+      // 🎯 如果1小时内慢响应超过5次，降低优先级
+      if (slowCount >= 5) {
+        const currentPriority = parseInt(account.priority) || 50
+        const newPriority = Math.min(currentPriority + 10, 90) // 优先级+10（数字越大优先级越低）
+
+        await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, {
+          priority: newPriority.toString(),
+          slowResponseWarning: `降低优先级: ${slowCount}次慢响应/小时`,
+          lastSlowResponseAt: new Date().toISOString()
+        })
+
+        logger.warn(
+          `⚠️ Account ${account.name} priority lowered: ${currentPriority} → ${newPriority} (${slowCount} slow responses/hour)`
+        )
+
+        // 发送Webhook通知
+        try {
+          const webhookNotifier = require('../utils/webhookNotifier')
+          await webhookNotifier.sendAccountAnomalyNotification({
+            accountId,
+            accountName: account.name,
+            platform: 'claude-console',
+            status: 'warning',
+            errorCode: 'SLOW_RESPONSE',
+            reason: `账户响应缓慢，1小时内${slowCount}次慢响应（>${responseTime}ms），已降低优先级 ${currentPriority}→${newPriority}`,
+            timestamp: new Date().toISOString()
+          })
+        } catch (webhookError) {
+          logger.error('Failed to send slow response webhook:', webhookError)
+        }
+      }
+
+      return { success: true, slowCount }
+    } catch (error) {
+      logger.error(`Failed to mark account as slow: ${accountId}`, error)
+      return { success: false, error: error.message }
+    }
+  }
+
+  // 🔄 恢复账户正常优先级（当响应速度恢复时）
+  async restoreAccountPriority(accountId) {
+    try {
+      const client = redis.getClientSafe()
+      const account = await this.getAccount(accountId)
+
+      if (!account) {
+        return { success: false }
+      }
+
+      // 检查是否有慢响应记录
+      const slowKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:slow_responses`
+      const slowCount = await client.zcard(slowKey)
+
+      // 如果最近1小时内慢响应少于2次，恢复默认优先级
+      if (slowCount < 2) {
+        const currentPriority = parseInt(account.priority) || 50
+
+        // 只恢复被降低过的优先级（>50）
+        if (currentPriority > 50) {
+          await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, {
+            priority: '50',
+            slowResponseWarning: ''
+          })
+
+          logger.info(
+            `✅ Restored priority for account ${account.name}: ${currentPriority} → 50 (response time improved)`
+          )
+        }
+      }
+
+      return { success: true }
+    } catch (error) {
+      logger.error(`Failed to restore account priority: ${accountId}`, error)
+      return { success: false }
     }
   }
 

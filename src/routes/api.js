@@ -779,8 +779,18 @@ async function handleMessagesRequest(req, res) {
     logger.api(`✅ Request completed in ${duration}ms for key: ${req.apiKey.name}`)
     return undefined
   } catch (error) {
-    logger.error('❌ Claude relay error:', error.message, {
+    // 增强错误日志：记录更多详细信息
+    logger.error('❌ Claude relay error:', {
+      message: error.message,
       code: error.code,
+      name: error.name,
+      statusCode: error.response?.status,
+      statusText: error.response?.statusText,
+      upstreamError: error.response?.data ?
+        (typeof error.response.data === 'string' ?
+          error.response.data.substring(0, 1000) :
+          JSON.stringify(error.response.data).substring(0, 1000)
+        ) : undefined,
       stack: error.stack
     })
 

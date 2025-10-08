@@ -80,6 +80,16 @@ const config = {
   // ⏱️ 请求超时配置
   requestTimeout: parseInt(process.env.REQUEST_TIMEOUT) || 600000, // 默认 10 分钟
 
+  // ⏰ 客户端断开后的上游等待配置
+  upstreamWaitAfterClientDisconnect: {
+    // 非流式请求：等待时间（毫秒）
+    nonStream: parseInt(process.env.UPSTREAM_WAIT_NON_STREAM) || 180000, // 180秒
+    // 流式请求：等待时间（毫秒）
+    stream: parseInt(process.env.UPSTREAM_WAIT_STREAM) || 180000, // 180秒
+    // 是否启用延迟取消（false则立即取消）
+    enabled: process.env.UPSTREAM_WAIT_ENABLED !== 'false' // 默认启用
+  },
+
   // 📈 使用限制
   limits: {
     defaultTokenLimit: parseInt(process.env.DEFAULT_TOKEN_LIMIT) || 1000000
