@@ -7,12 +7,14 @@ const bedrockAccountService = require('../services/bedrockAccountService')
 const unifiedClaudeScheduler = require('../services/unifiedClaudeScheduler')
 const apiKeyService = require('../services/apiKeyService')
 const pricingService = require('../services/pricingService')
+const contentModerationService = require('../services/contentModerationService')
 const { authenticateApiKey } = require('../middleware/auth')
 const logger = require('../utils/logger')
 const IntelligentErrorFilter = require('../utils/intelligentErrorFilter')
 const redis = require('../models/redis')
 const { getEffectiveModel, parseVendorPrefixedModel } = require('../utils/modelHelper')
 const sessionHelper = require('../utils/sessionHelper')
+const config = require('../../config/config')
 
 const router = express.Router()
 
@@ -71,6 +73,25 @@ async function handleMessagesRequest(req, res) {
             message: '暂无该模型访问权限'
           }
         })
+      }
+    }
+
+    // 🛡️ 内容审核：在发送到 Claude 之前检查用户输入
+    if (config.contentModeration && config.contentModeration.enabled) {
+      try {
+        const moderationResult = await contentModerationService.moderateContent(req.body)
+        if (!moderationResult.passed) {
+          logger.warn(`🚫 Content moderation blocked request for key: ${req.apiKey.name}`)
+          return res.status(400).json({
+            error: {
+              type: 'content_moderation_error',
+              message: moderationResult.message
+            }
+          })
+        }
+      } catch (moderationError) {
+        // 审核服务出错时记录日志但不阻止请求（优雅降级）
+        logger.error('❌ Content moderation service error:', moderationError)
       }
     }
 

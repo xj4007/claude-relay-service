@@ -175,6 +175,16 @@ const config = {
     retries: parseInt(process.env.WEBHOOK_RETRIES) || 3 // 重试3次
   },
 
+  // 🛡️ 内容审核配置
+  contentModeration: {
+    enabled: process.env.CONTENT_MODERATION_ENABLED === 'true',
+    apiBaseUrl: process.env.MODERATION_API_BASE_URL || 'https://api.siliconflow.cn',
+    apiKey: process.env.MODERATION_API_KEY || '',
+    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Next-80B-A3B-Instruct',
+    maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
+    timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000
+  },
+
   // 🛠️ 开发配置
   development: {
     debug: process.env.DEBUG === 'true',

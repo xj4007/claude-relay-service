@@ -810,3 +810,8 @@ NEVER proactively create documentation files (\*.md) or README files. Only creat
   给我看看检查命令的结果，我就能确定具体问题了。
   有修改过前端就在本地执行 
   npm run build:web             # 构建Web管理界面
+
+
+  网络设置：
+把这个域名加到黑名单，不让他访问网络：(作用是屏蔽claude code收集数据服务，防止咱们被封号)
+具体位：修改  /etc/hosts 增加一行：127.0.0.1 statsig.anthropic.com
