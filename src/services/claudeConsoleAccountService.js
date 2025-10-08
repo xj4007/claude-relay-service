@@ -1344,6 +1344,156 @@ class ClaudeConsoleAccountService {
       throw error
     }
   }
+
+  // 📝 记录5xx服务器错误（用于连续错误检测）
+  async recordServerError(accountId, statusCode) {
+    try {
+      const key = `claude_console_account:${accountId}:5xx_errors`
+
+      // 增加错误计数，设置5分钟过期时间
+      const client = redis.getClientSafe()
+      await client.incr(key)
+      await client.expire(key, 300) // 5分钟
+
+      logger.info(`📝 Recorded ${statusCode} error for Claude Console account ${accountId}`)
+    } catch (error) {
+      logger.error(`❌ Failed to record ${statusCode} error for account ${accountId}:`, error)
+    }
+  }
+
+  // 📊 获取5xx错误计数
+  async getServerErrorCount(accountId) {
+    try {
+      const key = `claude_console_account:${accountId}:5xx_errors`
+      const client = redis.getClientSafe()
+
+      const count = await client.get(key)
+      return parseInt(count) || 0
+    } catch (error) {
+      logger.error(`❌ Failed to get 5xx error count for account ${accountId}:`, error)
+      return 0
+    }
+  }
+
+  // 🧹 清除5xx错误计数
+  async clearServerErrors(accountId) {
+    try {
+      const key = `claude_console_account:${accountId}:5xx_errors`
+      const client = redis.getClientSafe()
+
+      await client.del(key)
+      logger.info(`✅ Cleared 5xx error count for Claude Console account ${accountId}`)
+    } catch (error) {
+      logger.error(`❌ Failed to clear 5xx errors for account ${accountId}:`, error)
+    }
+  }
+
+  // ⚠️ 标记账号为临时错误状态（连续5xx错误后）
+  async markAccountTempError(accountId) {
+    try {
+      const client = redis.getClientSafe()
+      const accountData = await this.getAccount(accountId)
+
+      if (!accountData) {
+        throw new Error('Account not found')
+      }
+
+      // 更新账户状态
+      const updates = {
+        status: 'temp_error',
+        schedulable: 'false', // 停止调度
+        errorMessage: 'Account temporarily disabled due to consecutive 5xx errors',
+        tempErrorAt: new Date().toISOString(),
+        tempErrorAutoStopped: 'true' // 标记为自动停止
+      }
+
+      await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
+
+      logger.warn(
+        `⚠️ Claude Console account ${accountData.name} (${accountId}) marked as temp_error and disabled for scheduling`
+      )
+
+      // 设置 5 分钟后自动恢复
+      setTimeout(
+        async () => {
+          try {
+            const account = await this.getAccount(accountId)
+            if (account && account.status === 'temp_error' && account.tempErrorAt) {
+              // 验证是否确实过了 5 分钟
+              const tempErrorAt = new Date(account.tempErrorAt)
+              const now = new Date()
+              const minutesSince = (now - tempErrorAt) / (1000 * 60)
+
+              if (minutesSince >= 5) {
+                // 恢复账户
+                const recoveryUpdates = {
+                  status: 'active',
+                  schedulable: 'true'
+                }
+
+                await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, recoveryUpdates)
+
+                // 删除临时错误相关字段
+                await client.hdel(
+                  `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
+                  'errorMessage',
+                  'tempErrorAt',
+                  'tempErrorAutoStopped'
+                )
+
+                // 清除 5xx 错误计数
+                await this.clearServerErrors(accountId)
+
+                logger.success(
+                  `✅ Auto-recovered temp_error after 5 minutes: ${account.name} (${accountId})`
+                )
+
+                // 发送恢复通知
+                try {
+                  const webhookNotifier = require('../utils/webhookNotifier')
+                  await webhookNotifier.sendAccountAnomalyNotification({
+                    accountId,
+                    accountName: account.name,
+                    platform: 'claude-console',
+                    status: 'recovered',
+                    errorCode: 'TEMP_ERROR_RECOVERED',
+                    reason: 'Account auto-recovered after 5 minutes from temp_error status',
+                    timestamp: new Date().toISOString()
+                  })
+                } catch (webhookError) {
+                  logger.error('Failed to send recovery webhook:', webhookError)
+                }
+              }
+            }
+          } catch (error) {
+            logger.error(`❌ Failed to auto-recover temp_error account ${accountId}:`, error)
+          }
+        },
+        6 * 60 * 1000
+      ) // 6 分钟后执行，确保已过 5 分钟
+
+      // 发送Webhook通知
+      try {
+        const webhookNotifier = require('../utils/webhookNotifier')
+        await webhookNotifier.sendAccountAnomalyNotification({
+          accountId,
+          accountName: accountData.name,
+          platform: 'claude-console',
+          status: 'temp_error',
+          errorCode: 'CONSECUTIVE_5XX_ERRORS',
+          reason: 'Account temporarily disabled due to consecutive 5xx errors',
+          timestamp: new Date().toISOString()
+        })
+      } catch (webhookError) {
+        logger.error('Failed to send temp_error webhook:', webhookError)
+      }
+
+      return { success: true }
+    } catch (error) {
+      logger.error(`❌ Failed to mark account ${accountId} as temp_error:`, error)
+      throw error
+    }
+  }
 }
 
 module.exports = new ClaudeConsoleAccountService()

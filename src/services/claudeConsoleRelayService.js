@@ -456,6 +456,18 @@ class ClaudeConsoleRelayService {
           body: JSON.stringify(sanitizedError),
           accountId
         }
+      } else if (response.status >= 500 && response.status <= 504) {
+        // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
+        await this._handleServerError(accountId, response.status)
+
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status >= 400) {
         // 返回脱敏后的错误信息
         const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
@@ -474,6 +486,15 @@ class ClaudeConsoleRelayService {
         const isOverloaded = await claudeConsoleAccountService.isAccountOverloaded(accountId)
         if (isOverloaded) {
           await claudeConsoleAccountService.removeAccountOverload(accountId)
+        }
+
+        // 🎯 清除5xx错误计数（请求成功说明上游恢复正常）
+        const errorCount = await claudeConsoleAccountService.getServerErrorCount(accountId)
+        if (errorCount > 0) {
+          await claudeConsoleAccountService.clearServerErrors(accountId)
+          logger.info(
+            `✅ Cleared ${errorCount} server error(s) for account ${accountId} after successful request`
+          )
         }
       }
 
@@ -713,6 +734,11 @@ class ClaudeConsoleRelayService {
               })
             } else if (response.status === 529) {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
+            } else if (response.status >= 500 && response.status <= 504) {
+              // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
+              this._handleServerError(accountId, response.status).catch((err) => {
+                logger.error(`Failed to handle server error: ${err.message}`)
+              })
             }
 
             // 🛡️ 发送脱敏后的错误信息而不是透传原始错误
@@ -740,6 +766,18 @@ class ClaudeConsoleRelayService {
               claudeConsoleAccountService.removeAccountOverload(accountId)
             }
           })
+
+          // 🎯 清除5xx错误计数（流式请求成功说明上游恢复正常）
+          claudeConsoleAccountService
+            .getServerErrorCount(accountId)
+            .then((errorCount) => {
+              if (errorCount > 0) {
+                return claudeConsoleAccountService.clearServerErrors(accountId)
+              }
+            })
+            .catch((err) => {
+              logger.error(`Failed to clear server errors: ${err.message}`)
+            })
 
           // 设置响应头
           if (!responseStream.headersSent) {
@@ -897,6 +935,11 @@ class ClaudeConsoleRelayService {
               })
             } else if (error.response.status === 529) {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
+            } else if (error.response.status >= 500 && error.response.status <= 504) {
+              // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
+              this._handleServerError(accountId, error.response.status).catch((err) => {
+                logger.error(`Failed to handle server error: ${err.message}`)
+              })
             }
           }
 
@@ -990,6 +1033,32 @@ class ClaudeConsoleRelayService {
     logger.info(`🏷️ Enhanced request body for special vendor using claudeCodeRequestEnhancer`)
 
     return enhancedBody
+  }
+
+  // 🔥 统一的5xx错误处理方法（记录错误并检查阈值）
+  async _handleServerError(accountId, statusCode) {
+    try {
+      // 记录错误
+      await claudeConsoleAccountService.recordServerError(accountId, statusCode)
+      const errorCount = await claudeConsoleAccountService.getServerErrorCount(accountId)
+
+      const threshold = 3 // 3次错误触发阈值
+      const isTimeout = statusCode === 504
+
+      logger.warn(
+        `⏱️ ${isTimeout ? 'Timeout' : 'Server'} error for Claude Console account ${accountId}, error count: ${errorCount}/${threshold}`
+      )
+
+      // 如果连续错误超过阈值，标记为 temp_error
+      if (errorCount > threshold) {
+        logger.error(
+          `❌ Claude Console account ${accountId} exceeded ${isTimeout ? 'timeout' : '5xx'} error threshold (${errorCount} errors), marking as temp_error`
+        )
+        await claudeConsoleAccountService.markAccountTempError(accountId)
+      }
+    } catch (handlingError) {
+      logger.error(`❌ Failed to handle server error for account ${accountId}:`, handlingError)
+    }
   }
 }
 

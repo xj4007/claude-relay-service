@@ -733,7 +733,7 @@ class UnifiedClaudeScheduler {
         if (!account || !account.isActive) {
           return false
         }
-        // 检查账户状态
+        // 检查账户状态（🔥 排除 temp_error、blocked、rate_limited 等状态）
         if (
           account.status !== 'active' &&
           account.status !== 'unauthorized' &&
