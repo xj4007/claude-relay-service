@@ -815,3 +815,22 @@ NEVER proactively create documentation files (\*.md) or README files. Only creat
   网络设置：
 把这个域名加到黑名单，不让他访问网络：(作用是屏蔽claude code收集数据服务，防止咱们被封号)
 具体位：修改  /etc/hosts 增加一行：127.0.0.1 statsig.anthropic.com
+
+
+如果有什么新的报错账号过滤要在代码里面添加
+  // 📋 获取所有Claude Console账户
+  async getAllAccounts() {
+    try {
+      const client = redis.getClientSafe()
+      const keys = await client.keys(`${this.ACCOUNT_KEY_PREFIX}*`)
+      const accounts = []
+
+      for (const key of keys) {
+        // 🔧 跳过非账户键（如 slow_responses、5xx_errors 等辅助数据）
+        if (
+          key.includes(':slow_responses') ||
+          key.includes(':5xx_errors') ||
+          key.includes(':temp_error')
+        ) {
+          continue
+        }
