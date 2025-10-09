@@ -1,0 +1,312 @@
+const crypto = require('crypto')
+const redis = require('../models/redis')
+const logger = require('../utils/logger')
+
+/**
+ * 响应缓存服务
+ * 用于缓存客户端断开但上游成功返回的响应
+ * 避免客户端重试时重复请求上游
+ */
+class ResponseCacheService {
+  constructor() {
+    this.CACHE_PREFIX = 'response_cache:'
+    this.STREAM_CACHE_PREFIX = 'stream_cache:'
+    this.DEFAULT_TTL = 180 // 3分钟
+    this.MAX_CACHE_SIZE = 5 * 1024 * 1024 // 5MB
+  }
+
+  /**
+   * 生成缓存键（基于请求内容的唯一哈希）
+   * @param {Object} requestBody - 请求体
+   * @param {string} model - 模型名称
+   * @returns {string} - 缓存键
+   */
+  generateCacheKey(requestBody, model) {
+    try {
+      // 构建缓存键的内容（包含所有影响输出的参数）
+      // ⚠️ 必须按固定顺序构建，确保相同内容生成相同哈希
+      const cacheContent = {
+        model: model,
+        messages: requestBody.messages || [],
+        system: requestBody.system || '',
+        max_tokens: requestBody.max_tokens,
+        temperature: requestBody.temperature,
+        top_p: requestBody.top_p,
+        top_k: requestBody.top_k,
+        stop_sequences: requestBody.stop_sequences,
+        // 不包含 metadata 和 stream，因为这些不影响输出内容
+      }
+
+      // 🔧 使用稳定的序列化方式（按键排序）
+      const stableJson = JSON.stringify(cacheContent, Object.keys(cacheContent).sort())
+
+      // 生成 SHA256 哈希
+      const hash = crypto.createHash('sha256').update(stableJson).digest('hex').substring(0, 32)
+
+      logger.debug(`📋 Cache key generated: ${hash}`)
+      return hash
+    } catch (error) {
+      logger.error(`❌ Failed to generate cache key: ${error.message}`)
+      return null
+    }
+  }
+
+  /**
+   * 检查缓存是否存在（非流式）
+   * @param {string} cacheKey - 缓存键
+   * @returns {Object|null} - 缓存的响应，如果不存在则返回 null
+   */
+  async getCachedResponse(cacheKey) {
+    if (!cacheKey) return null
+
+    try {
+      const client = redis.getClientSafe()
+      const redisKey = `${this.CACHE_PREFIX}${cacheKey}`
+      const cached = await client.hgetall(redisKey)
+
+      if (!cached || !cached.body) {
+        logger.debug(`📋 Cache miss: ${cacheKey}`)
+        return null
+      }
+
+      // 解析缓存的响应
+      const response = {
+        statusCode: parseInt(cached.statusCode) || 200,
+        headers: JSON.parse(cached.headers || '{}'),
+        body: JSON.parse(cached.body),
+        usage: cached.usage ? JSON.parse(cached.usage) : null,
+        cachedAt: parseInt(cached.cachedAt) || Date.now(),
+      }
+
+      logger.info(
+        `🎯 Cache hit: ${cacheKey} | Cached ${Math.floor((Date.now() - response.cachedAt) / 1000)}s ago`
+      )
+      return response
+    } catch (error) {
+      logger.error(`❌ Failed to get cached response: ${error.message}`)
+      return null
+    }
+  }
+
+  /**
+   * 缓存响应（非流式）
+   * @param {string} cacheKey - 缓存键
+   * @param {Object} response - 响应对象
+   * @param {number} ttl - 过期时间（秒）
+   */
+  async cacheResponse(cacheKey, response, ttl = this.DEFAULT_TTL) {
+    if (!cacheKey) return
+
+    try {
+      const client = redis.getClientSafe()
+      const redisKey = `${this.CACHE_PREFIX}${cacheKey}`
+
+      // 检查响应大小
+      const bodySize = JSON.stringify(response.body).length
+      if (bodySize > this.MAX_CACHE_SIZE) {
+        logger.warn(
+          `⚠️ Response too large to cache: ${(bodySize / 1024 / 1024).toFixed(2)}MB > ${this.MAX_CACHE_SIZE / 1024 / 1024}MB`
+        )
+        return
+      }
+
+      // 存储到 Redis Hash
+      const cacheData = {
+        statusCode: response.statusCode.toString(),
+        headers: JSON.stringify(response.headers),
+        body: JSON.stringify(response.body),
+        usage: response.usage ? JSON.stringify(response.usage) : '',
+        cachedAt: Date.now().toString(),
+      }
+
+      await client.hset(redisKey, cacheData)
+      await client.expire(redisKey, ttl)
+
+      logger.info(
+        `💾 Cached response: ${cacheKey} | Size: ${(bodySize / 1024).toFixed(2)}KB | TTL: ${ttl}s`
+      )
+    } catch (error) {
+      logger.error(`❌ Failed to cache response: ${error.message}`)
+    }
+  }
+
+  /**
+   * 检查流式缓存是否存在
+   * @param {string} cacheKey - 缓存键
+   * @returns {Array|null} - 缓存的 chunks 数组，如果不存在则返回 null
+   */
+  async getCachedStream(cacheKey) {
+    if (!cacheKey) return null
+
+    try {
+      const client = redis.getClientSafe()
+      const redisKey = `${this.STREAM_CACHE_PREFIX}${cacheKey}`
+
+      // 检查是否存在且完整
+      const metadata = await client.hgetall(`${redisKey}:meta`)
+      if (!metadata || metadata.complete !== 'true') {
+        logger.debug(`📋 Stream cache miss or incomplete: ${cacheKey}`)
+        return null
+      }
+
+      // 获取所有 chunks
+      const chunks = await client.lrange(redisKey, 0, -1)
+      if (!chunks || chunks.length === 0) {
+        return null
+      }
+
+      logger.info(
+        `🎯 Stream cache hit: ${cacheKey} | ${chunks.length} chunks | Cached ${Math.floor((Date.now() - parseInt(metadata.cachedAt)) / 1000)}s ago`
+      )
+      return chunks.map((chunk) => JSON.parse(chunk))
+    } catch (error) {
+      logger.error(`❌ Failed to get cached stream: ${error.message}`)
+      return null
+    }
+  }
+
+  /**
+   * 开始缓存流式响应
+   * @param {string} cacheKey - 缓存键
+   * @returns {Object} - 缓存收集器对象
+   */
+  createStreamCacheCollector(cacheKey) {
+    if (!cacheKey) return null
+
+    const chunks = []
+    let totalSize = 0
+    let isComplete = false
+
+    return {
+      /**
+       * 添加一个 chunk
+       * @param {Object} chunk - SSE chunk 对象
+       */
+      addChunk(chunk) {
+        const chunkStr = JSON.stringify(chunk)
+        const chunkSize = chunkStr.length
+
+        // 检查大小限制
+        if (totalSize + chunkSize > this.MAX_CACHE_SIZE) {
+          logger.warn(`⚠️ Stream cache size limit reached, stopping collection`)
+          return false
+        }
+
+        chunks.push(chunk)
+        totalSize += chunkSize
+
+        // 检查是否完成
+        if (chunk.event === 'message_stop') {
+          isComplete = true
+        }
+
+        return true
+      },
+
+      /**
+       * 保存到 Redis（只有完整接收才保存）
+       * @param {number} ttl - 过期时间（秒）
+       */
+      async save(ttl = this.DEFAULT_TTL) {
+        if (!isComplete) {
+          logger.debug(`📋 Stream incomplete, not caching: ${cacheKey}`)
+          return
+        }
+
+        try {
+          const client = redis.getClientSafe()
+          const redisKey = `${this.STREAM_CACHE_PREFIX}${cacheKey}`
+
+          // 清空旧数据（如果存在）
+          await client.del(redisKey)
+          await client.del(`${redisKey}:meta`)
+
+          // 存储所有 chunks
+          for (const chunk of chunks) {
+            await client.rpush(redisKey, JSON.stringify(chunk))
+          }
+
+          // 存储元数据
+          await client.hset(`${redisKey}:meta`, {
+            complete: 'true',
+            cachedAt: Date.now().toString(),
+            chunkCount: chunks.length.toString(),
+          })
+
+          // 设置过期时间
+          await client.expire(redisKey, ttl)
+          await client.expire(`${redisKey}:meta`, ttl)
+
+          logger.info(
+            `💾 Cached stream: ${cacheKey} | ${chunks.length} chunks | Size: ${(totalSize / 1024).toFixed(2)}KB | TTL: ${ttl}s`
+          )
+        } catch (error) {
+          logger.error(`❌ Failed to save stream cache: ${error.message}`)
+        }
+      },
+
+      /**
+       * 获取收集状态
+       */
+      getStats() {
+        return {
+          chunkCount: chunks.length,
+          totalSize,
+          isComplete,
+        }
+      },
+    }
+  }
+
+  /**
+   * 清除指定的缓存
+   * @param {string} cacheKey - 缓存键
+   */
+  async clearCache(cacheKey) {
+    if (!cacheKey) return
+
+    try {
+      const client = redis.getClientSafe()
+      await client.del(`${this.CACHE_PREFIX}${cacheKey}`)
+      await client.del(`${this.STREAM_CACHE_PREFIX}${cacheKey}`)
+      await client.del(`${this.STREAM_CACHE_PREFIX}${cacheKey}:meta`)
+      logger.debug(`🗑️ Cleared cache: ${cacheKey}`)
+    } catch (error) {
+      logger.error(`❌ Failed to clear cache: ${error.message}`)
+    }
+  }
+
+  /**
+   * 获取缓存统计信息
+   */
+  async getStats() {
+    try {
+      const client = redis.getClientSafe()
+
+      // 统计非流式缓存
+      const responseCacheKeys = await client.keys(`${this.CACHE_PREFIX}*`)
+      let totalResponseSize = 0
+      for (const key of responseCacheKeys) {
+        const body = await client.hget(key, 'body')
+        if (body) totalResponseSize += body.length
+      }
+
+      // 统计流式缓存
+      const streamCacheKeys = await client.keys(`${this.STREAM_CACHE_PREFIX}*`)
+      const streamCacheCount = streamCacheKeys.filter((k) => !k.endsWith(':meta')).length
+
+      return {
+        responseCacheCount: responseCacheKeys.length,
+        responseCacheSizeMB: (totalResponseSize / 1024 / 1024).toFixed(2),
+        streamCacheCount,
+        ttlSeconds: this.DEFAULT_TTL,
+        maxCacheSizeMB: this.MAX_CACHE_SIZE / 1024 / 1024,
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to get cache stats: ${error.message}`)
+      return null
+    }
+  }
+}
+
+module.exports = new ResponseCacheService()
