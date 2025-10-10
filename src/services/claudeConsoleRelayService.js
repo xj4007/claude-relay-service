@@ -271,7 +271,7 @@ class ClaudeConsoleRelayService {
             statusCode: cachedResponse.statusCode,
             headers: cachedResponse.headers,
             body: cachedResponse.body,
-            usage: cachedResponse.usage,
+            usage: cachedResponse.usage
           }
         }
       }
@@ -481,7 +481,7 @@ class ClaudeConsoleRelayService {
                 statusCode: response.status,
                 headers: response.headers,
                 body: response.data,
-                usage: usage,
+                usage: usage
               },
               180 // TTL: 3分钟
             )
@@ -497,16 +497,13 @@ class ClaudeConsoleRelayService {
           `✅ [RESP] Status: ${response.status} | Acc: ${account.name} | ${responseTimeEmoji} ${upstreamDuration}ms`
         )
 
-        // 🏷️ 如果响应慢（>20秒），记录账户性能
-        if (upstreamDuration > 20000) {
-          claudeConsoleAccountService.markAccountSlow(accountId, upstreamDuration).catch((err) => {
-            logger.error(`Failed to mark account as slow: ${err.message}`)
-          })
-        } else if (upstreamDuration < 10000) {
-          // ✅ 响应快（<10秒），尝试恢复优先级
-          claudeConsoleAccountService.restoreAccountPriority(accountId).catch((err) => {
-            logger.error(`Failed to restore account priority: ${err.message}`)
-          })
+        // 📊 记录超慢响应用于监控（>60秒），但不自动降级
+        // 原因：慢但成功的请求可能是正常的复杂任务（大上下文、Prompt Caching首次缓存、复杂推理等）
+        // 如需调整账户优先级，管理员可通过 Web 界面手动操作
+        if (upstreamDuration > 60000) {
+          logger.info(
+            `🐌 Very slow response: ${upstreamDuration}ms | Acc: ${account.name} | 请求成功，仅记录用于监控`
+          )
         }
       }
 

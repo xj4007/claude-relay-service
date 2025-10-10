@@ -748,6 +748,11 @@ class ClaudeConsoleAccountService {
   }
 
   // 🐌 标记账户响应慢（降低优先级但不禁用）
+  // ⚠️ 注意：此方法不再自动调用，仅供以下场景使用：
+  //   1. 管理员通过 Web 界面手动标记
+  //   2. CLI 工具手动调整优先级
+  //   3. 特殊监控脚本调用
+  // 设计原因：成功响应不应因慢而被自动惩罚（可能是正常的复杂请求：大上下文、Prompt Caching首次缓存、复杂推理等）
   async markAccountSlow(accountId, responseTime) {
     try {
       const client = redis.getClientSafe()
@@ -818,6 +823,8 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔄 恢复账户正常优先级（当响应速度恢复时）
+  // ⚠️ 注意：此方法不再自动调用，仅供手动恢复使用
+  // 设计原因：与 markAccountSlow() 配套，保留供管理员手动操作
   async restoreAccountPriority(accountId) {
     try {
       const client = redis.getClientSafe()
