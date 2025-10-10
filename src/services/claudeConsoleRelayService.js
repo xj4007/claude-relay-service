@@ -546,7 +546,16 @@ class ClaudeConsoleRelayService {
         }
       } else if (response.status >= 500 && response.status <= 504) {
         // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
-        await this._handleServerError(accountId, response.status)
+        // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
+        if (response.status === 504 && clientDisconnected) {
+          logger.warn(
+            `⚠️ 504 Gateway Timeout while client disconnected - likely intermediate proxy timeout, not marking account as error | Acc: ${account.name}`
+          )
+          // 不记录为服务器错误，因为上游可能稍后成功
+        } else {
+          // 其他5xx错误或客户端未断开时的504，正常记录错误
+          await this._handleServerError(accountId, response.status)
+        }
 
         // 返回脱敏后的错误信息
         const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
@@ -879,9 +888,18 @@ class ClaudeConsoleRelayService {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
             } else if (response.status >= 500 && response.status <= 504) {
               // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
-              this._handleServerError(accountId, response.status).catch((err) => {
-                logger.error(`Failed to handle server error: ${err.message}`)
-              })
+              // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
+              if (response.status === 504 && clientDisconnected) {
+                logger.warn(
+                  `⚠️ [STREAM] 504 Gateway Timeout while client disconnected - likely intermediate proxy timeout, not marking account as error | Acc: ${account?.name}`
+                )
+                // 不记录为服务器错误，因为上游可能稍后成功
+              } else {
+                // 其他5xx错误或客户端未断开时的504，正常记录错误
+                this._handleServerError(accountId, response.status).catch((err) => {
+                  logger.error(`Failed to handle server error: ${err.message}`)
+                })
+              }
             }
 
             // 🛡️ 发送脱敏后的错误信息而不是透传原始错误
@@ -1080,9 +1098,18 @@ class ClaudeConsoleRelayService {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
             } else if (error.response.status >= 500 && error.response.status <= 504) {
               // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
-              this._handleServerError(accountId, error.response.status).catch((err) => {
-                logger.error(`Failed to handle server error: ${err.message}`)
-              })
+              // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
+              if (error.response.status === 504 && clientDisconnected) {
+                logger.warn(
+                  `⚠️ [STREAM-ERR] 504 Gateway Timeout while client disconnected - likely intermediate proxy timeout, not marking account as error | Acc: ${account?.name}`
+                )
+                // 不记录为服务器错误，因为上游可能稍后成功
+              } else {
+                // 其他5xx错误或客户端未断开时的504，正常记录错误
+                this._handleServerError(accountId, error.response.status).catch((err) => {
+                  logger.error(`Failed to handle server error: ${err.message}`)
+                })
+              }
             }
           }
 
