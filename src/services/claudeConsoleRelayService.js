@@ -1,4 +1,5 @@
 const axios = require('axios')
+const { v4: uuidv4 } = require('uuid')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
 const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
@@ -637,11 +638,57 @@ class ClaudeConsoleRelayService {
     options = {}
   ) {
     let account = null
+    let requestId = null
+    let concurrencyIncremented = false
+
+    // 清理并发计数的辅助函数
+    const cleanupConcurrency = async () => {
+      if (concurrencyIncremented && requestId && accountId) {
+        try {
+          await claudeConsoleAccountService.decrAccountConcurrency(accountId, requestId)
+          logger.debug(`🧹 [STREAM] Cleaned up concurrency for account ${accountId}`)
+        } catch (cleanupError) {
+          logger.error(`❌ Failed to cleanup concurrency for account ${accountId}:`, cleanupError)
+        }
+      }
+    }
+
     try {
       // 获取账户信息
       account = await claudeConsoleAccountService.getAccount(accountId)
       if (!account) {
         throw new Error('Claude Console Claude account not found')
+      }
+
+      // 🆕 并发控制：检查账户并发限制
+      const concurrencyLimit = account.accountConcurrencyLimit
+        ? parseInt(account.accountConcurrencyLimit)
+        : 0
+
+      if (concurrencyLimit > 0) {
+        requestId = uuidv4()
+
+        // 增加并发计数
+        const currentConcurrency = await claudeConsoleAccountService.incrAccountConcurrency(
+          accountId,
+          requestId
+        )
+        concurrencyIncremented = true
+
+        // 检查是否超过限制
+        if (currentConcurrency > concurrencyLimit) {
+          await cleanupConcurrency()
+          logger.warn(
+            `🚫 [STREAM] Account ${account.name} concurrency limit exceeded: ${currentConcurrency}/${concurrencyLimit}`
+          )
+          throw new Error(
+            `Account concurrency limit exceeded: ${currentConcurrency}/${concurrencyLimit}`
+          )
+        }
+
+        logger.debug(
+          `✅ [STREAM] Account ${account.name} concurrency: ${currentConcurrency}/${concurrencyLimit}`
+        )
       }
 
       // 处理模型映射
@@ -706,6 +753,9 @@ class ClaudeConsoleRelayService {
         `❌ [STREAM-ERR] Acc: ${account?.name} | Code: ${error.code || error.name} | Status: ${error.response?.status || 'N/A'} | ${errorMsg}`
       )
       throw error
+    } finally {
+      // 🆕 确保清理并发计数
+      await cleanupConcurrency()
     }
   }
 

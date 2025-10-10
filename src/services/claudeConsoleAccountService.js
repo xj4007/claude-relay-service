@@ -1549,9 +1549,18 @@ class ClaudeConsoleAccountService {
   // 获取账户当前并发数
   async getAccountConcurrency(accountId) {
     const client = redis.getClientSafe()
-    const key = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}`
-    const keys = await client.keys(`${key}:*`)
-    return keys.length
+    const pattern = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}:*`
+    let cursor = '0'
+    let count = 0
+
+    // 使用 SCAN 命令避免阻塞 Redis（生产环境推荐）
+    do {
+      const reply = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
+      cursor = reply[0]
+      count += reply[1].length
+    } while (cursor !== '0')
+
+    return count
   }
 
   // 刷新账户并发租期
