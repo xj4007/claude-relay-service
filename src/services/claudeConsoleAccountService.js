@@ -147,11 +147,12 @@ class ClaudeConsoleAccountService {
       const accounts = []
 
       for (const key of keys) {
-        // 🔧 跳过非账户键（如 slow_responses、5xx_errors 等辅助数据）
+        // 🔧 跳过非账户键（如 slow_responses、5xx_errors、stream_timeouts 等辅助数据）
         if (
           key.includes(':slow_responses') ||
           key.includes(':5xx_errors') ||
-          key.includes(':temp_error')
+          key.includes(':temp_error') ||
+          key.includes(':stream_timeouts')
         ) {
           continue
         }
@@ -1568,6 +1569,108 @@ class ClaudeConsoleAccountService {
     const client = redis.getClientSafe()
     const requestKey = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}:${requestId}`
     await client.expire(requestKey, leaseSeconds)
+  }
+
+  // 🔥 流式超时管理方法
+
+  /**
+   * 记录流式超时事件
+   * @param {string} accountId - 账户ID
+   * @param {string} timeoutType - 超时类型（TOTAL_TIMEOUT | IDLE_TIMEOUT）
+   * @param {number} duration - 超时时长（毫秒）
+   */
+  async recordStreamTimeout(accountId, timeoutType, duration) {
+    try {
+      const client = redis.getClientSafe()
+      const timeoutKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:stream_timeouts`
+      const now = Date.now()
+      const oneHourAgo = now - 3600000
+
+      // 添加超时记录：成员格式 {timestamp}:{timeoutType}:{duration}
+      await client.zadd(timeoutKey, now, `${now}:${timeoutType}:${duration}`)
+
+      // 清理1小时前的记录
+      await client.zremrangebyscore(timeoutKey, '-inf', oneHourAgo)
+
+      // 设置2小时TTL（超时记录会自动过期）
+      await client.expire(timeoutKey, 7200)
+
+      logger.info(
+        `📝 Recorded stream timeout for account ${accountId}: ${timeoutType} (${duration}ms)`
+      )
+    } catch (error) {
+      logger.error(`❌ Failed to record stream timeout for account ${accountId}:`, error)
+    }
+  }
+
+  /**
+   * 获取流式超时次数（1小时内）
+   * @param {string} accountId - 账户ID
+   * @returns {Promise<number>} 超时次数
+   */
+  async getStreamTimeoutCount(accountId) {
+    try {
+      const client = redis.getClientSafe()
+      const timeoutKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:stream_timeouts`
+      const count = await client.zcard(timeoutKey)
+      return count || 0
+    } catch (error) {
+      logger.error(`❌ Failed to get stream timeout count for account ${accountId}:`, error)
+      return 0
+    }
+  }
+
+  /**
+   * 清除流式超时记录
+   * @param {string} accountId - 账户ID
+   */
+  async clearStreamTimeouts(accountId) {
+    try {
+      const client = redis.getClientSafe()
+      const timeoutKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:stream_timeouts`
+      await client.del(timeoutKey)
+      logger.info(`✅ Cleared stream timeouts for account ${accountId}`)
+    } catch (error) {
+      logger.error(`❌ Failed to clear stream timeouts for account ${accountId}:`, error)
+    }
+  }
+
+  /**
+   * 获取流式超时详细记录（用于调试）
+   * @param {string} accountId - 账户ID
+   * @returns {Promise<Array>} 超时记录数组
+   */
+  async getStreamTimeoutDetails(accountId) {
+    try {
+      const client = redis.getClientSafe()
+      const timeoutKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}:stream_timeouts`
+
+      // 获取所有记录（带分数）
+      const records = await client.zrange(timeoutKey, 0, -1, 'WITHSCORES')
+
+      // 解析记录
+      const details = []
+      for (let i = 0; i < records.length; i += 2) {
+        const member = records[i]
+        const score = parseFloat(records[i + 1])
+
+        // 解析成员：{timestamp}:{timeoutType}:{duration}
+        const parts = member.split(':')
+        if (parts.length >= 3) {
+          details.push({
+            timestamp: new Date(score),
+            timeoutType: parts[1],
+            duration: parseInt(parts[2]),
+            raw: member
+          })
+        }
+      }
+
+      return details
+    } catch (error) {
+      logger.error(`❌ Failed to get stream timeout details for account ${accountId}:`, error)
+      return []
+    }
   }
 }
 

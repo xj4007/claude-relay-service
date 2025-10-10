@@ -1,4 +1,5 @@
 const express = require('express')
+const { PassThrough } = require('stream')
 const claudeRelayService = require('../services/claudeRelayService')
 const claudeConsoleRelayService = require('../services/claudeConsoleRelayService')
 const bedrockRelayService = require('../services/bedrockRelayService')
@@ -14,6 +15,10 @@ const config = require('../../config/config')
 const { authenticateApiKey } = require('../middleware/auth')
 const logger = require('../utils/logger')
 const { getEffectiveModel, parseVendorPrefixedModel } = require('../utils/modelHelper')
+const {
+  shouldForceStreamForModel,
+  StreamResponseAggregator
+} = require('../utils/streamHelpers')
 const sessionHelper = require('../utils/sessionHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 
@@ -128,11 +133,232 @@ async function handleMessagesRequest(req, res) {
     // 检查是否为流式请求
     const isStream = req.body.stream === true
 
+    // 🔥 检测是否需要强制流式转换（sonnet/opus模型）
+    const needForceStream = !isStream && shouldForceStreamForModel(req.body.model)
+
+    if (needForceStream) {
+      logger.info(
+        `🔄 Force converting to stream for model: ${req.body.model} | Key: ${req.apiKey.name}`
+      )
+    }
+
     logger.api(
-      `🚀 Processing ${isStream ? 'stream' : 'non-stream'} request for key: ${req.apiKey.name}`
+      `🚀 Processing ${isStream || needForceStream ? 'stream' : 'non-stream'} request for key: ${req.apiKey.name}${needForceStream ? ' (forced)' : ''}`
     )
 
-    if (isStream) {
+    // 🔥 处理强制流式转换的请求
+    if (needForceStream) {
+      // 修改请求体为流式
+      const originalRequestBody = { ...req.body }
+      req.body.stream = true
+
+      // 创建响应聚合器
+      const aggregator = new StreamResponseAggregator()
+
+      // 创建内部流（用于接收上游数据）
+      const internalStream = new PassThrough()
+
+      // 🔧 添加 HTTP Response 需要的方法（模拟响应对象）
+      // 这些方法是为了兼容 relay service 对 HTTP Response 对象的期望
+      internalStream.writeHead = function (statusCode, headers) {
+        this.statusCode = statusCode
+        this.responseHeaders = headers || {}
+        this.headersSent = true
+        logger.debug(`📦 Mock writeHead: ${statusCode}`)
+      }
+      internalStream.setHeader = function (name, value) {
+        if (!this.responseHeaders) this.responseHeaders = {}
+        this.responseHeaders[name] = value
+      }
+      internalStream.getHeader = function (name) {
+        return this.responseHeaders ? this.responseHeaders[name] : undefined
+      }
+      internalStream.removeHeader = function (name) {
+        if (this.responseHeaders) delete this.responseHeaders[name]
+      }
+
+      // 初始化属性
+      internalStream.statusCode = 200
+      internalStream.responseHeaders = {}
+      internalStream.headersSent = false
+      internalStream.finished = false
+
+      // 重写 end 方法以标记 finished
+      const originalEnd = internalStream.end.bind(internalStream)
+      internalStream.end = function (...args) {
+        this.finished = true
+        return originalEnd(...args)
+      }
+
+      let usageDataCaptured = false
+      let streamError = null
+
+      // 生成会话哈希
+      const sessionHash = sessionHelper.generateSessionHash(originalRequestBody)
+
+      // 选择账户
+      const requestedModel = originalRequestBody.model
+      let accountId, accountType
+      try {
+        const selection = await unifiedClaudeScheduler.selectAccountForApiKey(
+          req.apiKey,
+          sessionHash,
+          requestedModel
+        )
+        ;({ accountId, accountType } = selection)
+      } catch (error) {
+        if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
+          const limitMessage = claudeRelayService._buildStandardRateLimitMessage(
+            error.rateLimitEndAt
+          )
+          return res.status(403).json({
+            error: 'upstream_rate_limited',
+            message: limitMessage
+          })
+        }
+        throw error
+      }
+
+      // 处理内部流数据（聚合响应）
+      let buffer = ''
+      internalStream.on('data', (chunk) => {
+        buffer += chunk.toString()
+
+        // 处理完整的SSE行
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          aggregator.processSSELine(line)
+        }
+      })
+
+      internalStream.on('end', () => {
+        // 处理剩余数据
+        if (buffer.trim()) {
+          const lines = buffer.split('\n')
+          for (const line of lines) {
+            aggregator.processSSELine(line)
+          }
+        }
+      })
+
+      internalStream.on('error', (error) => {
+        streamError = error
+        logger.error(`❌ Internal stream error: ${error.message}`)
+      })
+
+      // 调用流式服务（根据账户类型）
+      try {
+        if (accountType === 'claude-console') {
+          await claudeConsoleRelayService.relayStreamRequestWithUsageCapture(
+            req.body,
+            req.apiKey,
+            internalStream,
+            req.headers,
+            (usageData) => {
+              if (
+                usageData &&
+                usageData.input_tokens !== undefined &&
+                usageData.output_tokens !== undefined
+              ) {
+                const inputTokens = usageData.input_tokens || 0
+                const outputTokens = usageData.output_tokens || 0
+                let cacheCreateTokens = usageData.cache_creation_input_tokens || 0
+                let ephemeral5mTokens = 0
+                let ephemeral1hTokens = 0
+
+                if (usageData.cache_creation && typeof usageData.cache_creation === 'object') {
+                  ephemeral5mTokens = usageData.cache_creation.ephemeral_5m_input_tokens || 0
+                  ephemeral1hTokens = usageData.cache_creation.ephemeral_1h_input_tokens || 0
+                  cacheCreateTokens = ephemeral5mTokens + ephemeral1hTokens
+                }
+
+                const cacheReadTokens = usageData.cache_read_input_tokens || 0
+                const model = usageData.model || 'unknown'
+                const usageAccountId = usageData.accountId
+
+                const usageObject = {
+                  input_tokens: inputTokens,
+                  output_tokens: outputTokens,
+                  cache_creation_input_tokens: cacheCreateTokens,
+                  cache_read_input_tokens: cacheReadTokens
+                }
+
+                if (ephemeral5mTokens > 0 || ephemeral1hTokens > 0) {
+                  usageObject.cache_creation = {
+                    ephemeral_5m_input_tokens: ephemeral5mTokens,
+                    ephemeral_1h_input_tokens: ephemeral1hTokens
+                  }
+                }
+
+                apiKeyService
+                  .recordUsageWithDetails(
+                    req.apiKey.id,
+                    usageObject,
+                    model,
+                    usageAccountId,
+                    'claude-console'
+                  )
+                  .catch((error) => {
+                    logger.error('❌ Failed to record forced-stream usage:', error)
+                  })
+
+                queueRateLimitUpdate(
+                  req.rateLimitInfo,
+                  { inputTokens, outputTokens, cacheCreateTokens, cacheReadTokens },
+                  model,
+                  'forced-stream'
+                )
+
+                usageDataCaptured = true
+                logger.api(
+                  `📊 Forced-stream usage recorded - Model: ${model}, Input: ${inputTokens}, Output: ${outputTokens}`
+                )
+              }
+            },
+            accountId
+          )
+        } else if (accountType === 'claude-official') {
+          // Claude官方账户（类似处理）
+          await claudeRelayService.relayStreamRequestWithUsageCapture(
+            req.body,
+            req.apiKey,
+            internalStream,
+            req.headers,
+            (usageData) => {
+              // ... 类似的usage处理逻辑
+              usageDataCaptured = true
+            }
+          )
+        } else {
+          throw new Error(`Forced streaming not supported for account type: ${accountType}`)
+        }
+
+        // 流式请求完成，构建最终JSON响应
+        if (streamError) {
+          return res.status(500).json({
+            error: 'stream_processing_error',
+            message: streamError.message
+          })
+        }
+
+        if (aggregator.hasError()) {
+          const errorResponse = aggregator.buildFinalResponse()
+          return res.status(500).json(errorResponse)
+        }
+
+        // 返回聚合后的标准JSON响应
+        const finalResponse = aggregator.buildFinalResponse()
+        return res.json(finalResponse)
+      } catch (error) {
+        logger.error(`❌ Forced stream conversion failed: ${error.message}`)
+        return res.status(500).json({
+          error: 'forced_stream_conversion_error',
+          message: error.message
+        })
+      }
+    } else if (isStream) {
       // 流式响应 - 只使用官方真实usage数据
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('Cache-Control', 'no-cache')

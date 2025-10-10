@@ -4,6 +4,7 @@ const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
 const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
 const responseCacheService = require('./responseCacheService')
+const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 
@@ -850,6 +851,58 @@ class ClaudeConsoleRelayService {
     return new Promise((resolve, reject) => {
       let aborted = false
 
+      // 🔥 创建流式超时监控器
+      const streamTimeoutConfig = config.streamTimeout || {
+        total: 180000, // 3分钟
+        idle: 30000, // 30秒
+        enabled: true
+      }
+
+      let timeoutMonitor = null
+      let monitorStopped = false
+
+      // 只在配置启用时创建监控器
+      if (streamTimeoutConfig.enabled) {
+        timeoutMonitor = new StreamTimeoutMonitor(
+          streamTimeoutConfig.total,
+          streamTimeoutConfig.idle
+        )
+
+        timeoutMonitor.start((timeoutType, duration) => {
+          if (monitorStopped || aborted) return
+
+          logger.error(
+            `⏱️ Stream timeout detected (${timeoutType}): ${duration}ms | Acc: ${account?.name}`
+          )
+
+          // 标记账户超时
+          this._handleStreamTimeout(accountId, timeoutType, duration).catch((err) =>
+            logger.error('Failed to handle stream timeout:', err)
+          )
+
+          // 发送超时错误到客户端
+          if (!responseStream.destroyed) {
+            this._sendSanitizedStreamError(
+              responseStream,
+              504,
+              `Stream timeout: ${timeoutType} after ${duration}ms`,
+              accountId
+            )
+          }
+
+          // 标记为已中止
+          aborted = true
+          monitorStopped = true
+
+          // 拒绝Promise
+          reject(new Error(`Stream timeout: ${timeoutType}`))
+        })
+
+        logger.debug(
+          `⏱️ Stream timeout monitor started: total=${streamTimeoutConfig.total}ms, idle=${streamTimeoutConfig.idle}ms | Acc: ${account?.name}`
+        )
+      }
+
       // 准备请求配置
       const requestConfig = {
         method: 'POST',
@@ -961,6 +1014,11 @@ class ClaudeConsoleRelayService {
                 return
               }
 
+              // 🔥 标记收到数据（重置空闲计时器）
+              if (timeoutMonitor && !monitorStopped) {
+                timeoutMonitor.markDataReceived()
+              }
+
               const chunkStr = chunk.toString()
               buffer += chunkStr
 
@@ -1044,6 +1102,13 @@ class ClaudeConsoleRelayService {
 
           response.data.on('end', () => {
             try {
+              // 🔥 停止超时监控器（流正常结束）
+              if (timeoutMonitor && !monitorStopped) {
+                timeoutMonitor.stop()
+                monitorStopped = true
+                logger.debug(`⏱️ Stream completed successfully, monitor stopped | Acc: ${account?.name}`)
+              }
+
               // 处理缓冲区中剩余的数据
               if (buffer.trim() && !responseStream.destroyed) {
                 if (streamTransformer) {
@@ -1069,6 +1134,12 @@ class ClaudeConsoleRelayService {
           })
 
           response.data.on('error', (error) => {
+            // 🔥 停止超时监控器（流出错）
+            if (timeoutMonitor && !monitorStopped) {
+              timeoutMonitor.stop()
+              monitorStopped = true
+            }
+
             logger.error(`❌ Stream data error (Acc: ${account?.name}): ${error.message}`)
             if (!responseStream.destroyed) {
               // 🛡️ 使用脱敏错误处理
@@ -1078,6 +1149,12 @@ class ClaudeConsoleRelayService {
           })
         })
         .catch((error) => {
+          // 🔥 停止超时监控器（请求失败）
+          if (timeoutMonitor && !monitorStopped) {
+            timeoutMonitor.stop()
+            monitorStopped = true
+          }
+
           if (aborted) {
             return
           }
@@ -1122,6 +1199,13 @@ class ClaudeConsoleRelayService {
 
       // 处理客户端断开连接
       responseStream.on('close', () => {
+        // 🔥 停止超时监控器（客户端断开）
+        if (timeoutMonitor && !monitorStopped) {
+          timeoutMonitor.stop()
+          monitorStopped = true
+          logger.debug(`⏱️ Client disconnected, monitor stopped | Acc: ${account?.name}`)
+        }
+
         aborted = true
       })
     })
@@ -1228,6 +1312,37 @@ class ClaudeConsoleRelayService {
       }
     } catch (handlingError) {
       logger.error(`❌ Failed to handle server error for account ${accountId}:`, handlingError)
+    }
+  }
+
+  // 🔥 流式超时处理方法
+  async _handleStreamTimeout(accountId, timeoutType, duration) {
+    try {
+      logger.error(
+        `⏱️ Stream timeout for account ${accountId}: ${timeoutType} after ${duration}ms`
+      )
+
+      // 记录超时事件到Redis
+      await claudeConsoleAccountService.recordStreamTimeout(accountId, timeoutType, duration)
+
+      // 获取超时次数
+      const timeoutCount = await claudeConsoleAccountService.getStreamTimeoutCount(accountId)
+
+      const threshold = 2 // 2次超时触发阈值（比5xx错误更严格）
+
+      logger.warn(
+        `⏱️ Stream timeout count for account ${accountId}: ${timeoutCount}/${threshold}`
+      )
+
+      // 如果连续超时超过阈值，标记为 temp_error
+      if (timeoutCount >= threshold) {
+        logger.error(
+          `❌ Account ${accountId} exceeded stream timeout threshold (${timeoutCount} timeouts), marking as temp_error`
+        )
+        await claudeConsoleAccountService.markAccountTempError(accountId)
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to handle stream timeout for account ${accountId}:`, error)
     }
   }
 }
