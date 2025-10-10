@@ -2638,7 +2638,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       proxy,
       accountType: accountType || 'shared',
       dailyQuota: dailyQuota || 0,
-      quotaResetTime: quotaResetTime || '00:00'
+      quotaResetTime: quotaResetTime || '00:00',
+      accountConcurrencyLimit: req.body.accountConcurrencyLimit || 0
     })
 
     // 如果是分组类型，将账户添加到分组（CCR 归属 Claude 平台分组）

@@ -175,12 +175,57 @@ class ClaudeConsoleRelayService {
   ) {
     let abortController = null
     let account = null
+    let accountRequestId = null
+    let concurrencyDecremented = false
+
+    // 并发清理函数
+    const cleanupConcurrency = async () => {
+      if (accountRequestId && !concurrencyDecremented) {
+        concurrencyDecremented = true
+        await claudeConsoleAccountService
+          .decrAccountConcurrency(accountId, accountRequestId)
+          .catch((err) => logger.error('Failed to decrement account concurrency:', err))
+      }
+    }
 
     try {
       // 获取账户信息
       account = await claudeConsoleAccountService.getAccount(accountId)
       if (!account) {
         throw new Error('Claude Console Claude account not found')
+      }
+
+      // 🔢 检查账户并发限制
+      const accountConcurrencyLimit = parseInt(account.accountConcurrencyLimit) || 0
+      if (accountConcurrencyLimit > 0) {
+        const { v4: uuidv4 } = require('uuid')
+        accountRequestId = uuidv4()
+
+        const currentConcurrency = await claudeConsoleAccountService.incrAccountConcurrency(
+          accountId,
+          accountRequestId,
+          600 // 10分钟租期
+        )
+
+        if (currentConcurrency > accountConcurrencyLimit) {
+          // 超过限制，立即释放
+          await cleanupConcurrency()
+
+          logger.warn(
+            `🚦 Account concurrency limit exceeded: ${account.name} (${currentConcurrency - 1}/${accountConcurrencyLimit})`
+          )
+
+          // 返回特殊错误，让调度器重试其他账户
+          const error = new Error('ACCOUNT_CONCURRENCY_EXCEEDED')
+          error.accountConcurrencyExceeded = true
+          error.currentConcurrency = currentConcurrency - 1
+          error.concurrencyLimit = accountConcurrencyLimit
+          throw error
+        }
+
+        logger.info(
+          `📈 Account concurrency: ${account.name} (${currentConcurrency}/${accountConcurrencyLimit})`
+        )
       }
 
       // 处理模型映射
@@ -557,6 +602,9 @@ class ClaudeConsoleRelayService {
         accountId
       }
     } catch (error) {
+      // 清理并发计数
+      await cleanupConcurrency()
+
       // 处理特定错误
       if (error.name === 'AbortError' || error.code === 'ECONNABORTED') {
         logger.info('Request aborted due to client disconnect')
@@ -574,6 +622,9 @@ class ClaudeConsoleRelayService {
       )
 
       throw error
+    } finally {
+      // 确保并发计数被清理
+      await cleanupConcurrency()
     }
   }
 

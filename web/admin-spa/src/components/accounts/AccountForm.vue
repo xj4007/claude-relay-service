@@ -1405,6 +1405,23 @@
               </p>
             </div>
 
+            <!-- 账户并发限制设置（仅Claude Console显示） -->
+            <div v-if="form.platform === 'claude-console'">
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                账户并发限制 (可选)
+              </label>
+              <input
+                v-model.number="form.accountConcurrencyLimit"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                min="0"
+                placeholder="0 表示无限制"
+                type="number"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                限制此账户同时处理的最大请求数，0 或留空表示无限制。推荐设置：3-5
+              </p>
+            </div>
+
             <!-- 手动输入 Token 字段 -->
             <div
               v-if="
@@ -2084,6 +2101,23 @@
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               数字越小优先级越高，建议范围：1-100
+            </p>
+          </div>
+
+          <!-- 账户并发限制设置（编辑模式，仅Claude Console显示） -->
+          <div v-if="form.platform === 'claude-console'">
+            <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+              账户并发限制 (可选)
+            </label>
+            <input
+              v-model.number="form.accountConcurrencyLimit"
+              class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+              min="0"
+              placeholder="0 表示无限制"
+              type="number"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              限制此账户同时处理的最大请求数，0 或留空表示无限制。推荐设置：3-5
             </p>
           </div>
 
@@ -2844,6 +2878,8 @@ const form = ref({
   dailyQuota: props.account?.dailyQuota || 0,
   dailyUsage: props.account?.dailyUsage || 0,
   quotaResetTime: props.account?.quotaResetTime || '00:00',
+  // 账户并发限制字段
+  accountConcurrencyLimit: props.account?.accountConcurrencyLimit || 0,
   // Bedrock 特定字段
   accessKeyId: props.account?.accessKeyId || '',
   secretAccessKey: props.account?.secretAccessKey || '',
@@ -3455,6 +3491,8 @@ const createAccount = async () => {
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
+      // 账户并发限制字段
+      data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
     } else if (form.value.platform === 'openai-responses') {
       // OpenAI-Responses 账户特定数据
       data.baseApi = form.value.baseApi
@@ -3701,6 +3739,8 @@ const updateAccount = async () => {
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
+      // 账户并发限制字段
+      data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
     }
 
     // OpenAI-Responses 特定更新

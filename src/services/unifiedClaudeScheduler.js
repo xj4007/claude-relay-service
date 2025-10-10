@@ -780,6 +780,19 @@ class UnifiedClaudeScheduler {
         if (await claudeConsoleAccountService.isAccountOverloaded(accountId)) {
           return false
         }
+        // 检查账户并发限制
+        const accountConcurrencyLimit = parseInt(account.accountConcurrencyLimit) || 0
+        if (accountConcurrencyLimit > 0) {
+          const currentConcurrency = await claudeConsoleAccountService.getAccountConcurrency(
+            accountId
+          )
+          if (currentConcurrency >= accountConcurrencyLimit) {
+            logger.debug(
+              `⏸️ Claude Console account ${account.name} at concurrency limit (${currentConcurrency}/${accountConcurrencyLimit})`
+            )
+            return false
+          }
+        }
         return true
       } else if (accountType === 'bedrock') {
         const accountResult = await bedrockAccountService.getAccount(accountId)
