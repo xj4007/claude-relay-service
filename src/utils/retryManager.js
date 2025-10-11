@@ -13,7 +13,7 @@ const logger = require('./logger')
 class RetryManager {
   constructor() {
     // 配置参数
-    this.MAX_RETRIES = 3 // 5xx错误最大重试次数
+    this.MAX_RETRIES = 2 // 🎯 优化: 5xx错误最大重试次数从3减少到2 (总共尝试3次)
     this.RETRY_DELAY = 0 // 重试延迟（毫秒），0表示立即重试
     this.SLOW_RESPONSE_TIMEOUT = 180000 // 慢响应超时（180秒）
     this.RETRYABLE_STATUS_CODES = [500, 502, 503, 504] // 可重试的状态码

@@ -1296,17 +1296,28 @@ class ClaudeConsoleRelayService {
       await claudeConsoleAccountService.recordServerError(accountId, statusCode)
       const errorCount = await claudeConsoleAccountService.getServerErrorCount(accountId)
 
-      const threshold = 3 // 3次错误触发阈值
-      const isTimeout = statusCode === 504
+      // 🎯 优化后的阈值策略：区分不同错误类型
+      let threshold
+      let errorType
+      if (statusCode === 504) {
+        threshold = 15 // 504超时错误更宽容：15次触发
+        errorType = 'Timeout (504)'
+      } else if (statusCode === 503 || statusCode === 529) {
+        threshold = 8 // 503/529服务不可用：8次触发
+        errorType = 'Service Unavailable'
+      } else {
+        threshold = 5 // 500/502等严重错误：5次触发
+        errorType = 'Server Error'
+      }
 
       logger.warn(
-        `⏱️ ${isTimeout ? 'Timeout' : 'Server'} error for Claude Console account ${accountId}, error count: ${errorCount}/${threshold}`
+        `⏱️ ${errorType} for Claude Console account ${accountId}, error count: ${errorCount}/${threshold}`
       )
 
       // 如果连续错误超过阈值，标记为 temp_error
       if (errorCount > threshold) {
         logger.error(
-          `❌ Claude Console account ${accountId} exceeded ${isTimeout ? 'timeout' : '5xx'} error threshold (${errorCount} errors), marking as temp_error`
+          `❌ Claude Console account ${accountId} exceeded ${errorType} threshold (${errorCount} errors), marking as temp_error`
         )
         await claudeConsoleAccountService.markAccountTempError(accountId)
       }
