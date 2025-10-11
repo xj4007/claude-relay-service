@@ -1,17 +1,22 @@
 const crypto = require('crypto')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
+const requestQueue = require('../utils/requestQueue')
 
 /**
  * 响应缓存服务
  * 用于缓存客户端断开但上游成功返回的响应
  * 避免客户端重试时重复请求上游
+ *
+ * 新功能：
+ * - 请求去重和等待共享（多个相同请求共享一个上游调用）
+ * - 增加TTL到5分钟
  */
 class ResponseCacheService {
   constructor() {
     this.CACHE_PREFIX = 'response_cache:'
     this.STREAM_CACHE_PREFIX = 'stream_cache:'
-    this.DEFAULT_TTL = 180 // 3分钟
+    this.DEFAULT_TTL = 300 // 5分钟（从180秒改为300秒）
     this.MAX_CACHE_SIZE = 5 * 1024 * 1024 // 5MB
   }
 
@@ -75,7 +80,7 @@ class ResponseCacheService {
         headers: JSON.parse(cached.headers || '{}'),
         body: JSON.parse(cached.body),
         usage: cached.usage ? JSON.parse(cached.usage) : null,
-        cachedAt: parseInt(cached.cachedAt) || Date.now(),
+        cachedAt: parseInt(cached.cachedAt) || Date.now()
       }
 
       logger.info(
@@ -86,6 +91,64 @@ class ResponseCacheService {
       logger.error(`❌ Failed to get cached response: ${error.message}`)
       return null
     }
+  }
+
+  /**
+   * 🆕 获取缓存或执行请求（带请求去重和等待共享）
+   * 如果缓存存在，直接返回缓存
+   * 如果正在请求中，等待并共享结果
+   * 如果都没有，执行新请求并缓存
+   *
+   * @param {string} cacheKey - 缓存键
+   * @param {Function} fetchFn - 请求函数 async () => response
+   * @param {number} ttl - 缓存TTL（秒）
+   * @returns {Promise<Object>} - 响应对象
+   */
+  async getOrFetchResponse(cacheKey, fetchFn, ttl = this.DEFAULT_TTL) {
+    if (!cacheKey) {
+      // 没有缓存键，直接执行请求
+      return await fetchFn()
+    }
+
+    // 1. 先检查缓存
+    const cached = await this.getCachedResponse(cacheKey)
+    if (cached) {
+      logger.info(`✅ Returning cached response | CacheKey: ${cacheKey.substring(0, 16)}...`)
+      return cached
+    }
+
+    // 2. 检查是否有相同请求正在进行，如果有则等待
+    // 如果没有，则执行新请求
+    const result = await requestQueue.executeOrWait(cacheKey, async () => {
+      logger.info(`🚀 Executing new upstream request | CacheKey: ${cacheKey.substring(0, 16)}...`)
+
+      // 执行实际请求
+      const response = await fetchFn()
+
+      // 缓存成功的响应（只缓存2xx响应）
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        await this.cacheResponse(cacheKey, response, ttl)
+        // 标记为成功，让等待的请求共享此结果
+        return { success: true, response }
+      } else {
+        logger.debug(
+          `⚠️ Not caching non-2xx response: ${response.statusCode} | CacheKey: ${cacheKey.substring(0, 16)}...`
+        )
+        // 标记为失败，让等待的请求重新尝试
+        return { success: false, response }
+      }
+    })
+
+    // 3. 如果是失败响应，等待的请求应该重新尝试而不是共享失败结果
+    if (!result.success) {
+      logger.warn(
+        `⚠️ Shared request failed (${result.response.statusCode}), waiting request will retry independently | CacheKey: ${cacheKey.substring(0, 16)}...`
+      )
+      // 🔄 重新执行请求（带重试逻辑），不共享失败结果
+      return await fetchFn()
+    }
+
+    return result.response
   }
 
   /**

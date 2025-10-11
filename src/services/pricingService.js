@@ -137,6 +137,7 @@ class PricingService {
   // 下载价格数据
   async downloadPricingData() {
     try {
+      logger.info('🌐 Attempting to download pricing data from GitHub...')
       await this._downloadFromRemote()
     } catch (downloadError) {
       logger.warn(`⚠️  Failed to download pricing data: ${downloadError.message}`)
@@ -148,8 +149,15 @@ class PricingService {
   // 实际的下载逻辑
   _downloadFromRemote() {
     return new Promise((resolve, reject) => {
+      // 添加超时计时器
+      const timeout = setTimeout(() => {
+        request.destroy()
+        reject(new Error('Download timeout after 10 seconds'))
+      }, 10000) // 减少到10秒，快速失败
+
       const request = https.get(this.pricingUrl, (response) => {
         if (response.statusCode !== 200) {
+          clearTimeout(timeout)
           reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`))
           return
         }
@@ -160,6 +168,7 @@ class PricingService {
         })
 
         response.on('end', () => {
+          clearTimeout(timeout)
           try {
             const jsonData = JSON.parse(data)
 
@@ -183,12 +192,14 @@ class PricingService {
       })
 
       request.on('error', (error) => {
+        clearTimeout(timeout)
         reject(new Error(`Network error: ${error.message}`))
       })
 
-      request.setTimeout(30000, () => {
+      request.on('timeout', () => {
+        clearTimeout(timeout)
         request.destroy()
-        reject(new Error('Download timeout after 30 seconds'))
+        reject(new Error('Request timeout'))
       })
     })
   }

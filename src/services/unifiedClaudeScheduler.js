@@ -122,8 +122,15 @@ class UnifiedClaudeScheduler {
   }
 
   // 🎯 统一调度Claude账号（官方和Console）
-  async selectAccountForApiKey(apiKeyData, sessionHash = null, requestedModel = null) {
+  async selectAccountForApiKey(apiKeyData, sessionHash = null, requestedModel = null, options = {}) {
     try {
+      // 🔄 支持排除账户列表（用于重试机制）
+      const { excludedAccounts = [] } = options
+
+      if (excludedAccounts.length > 0) {
+        logger.debug(`🚫 Excluding ${excludedAccounts.length} accounts from selection: ${excludedAccounts.join(', ')}`)
+      }
+
       // 解析供应商前缀
       const { vendor, baseModel } = parseVendorPrefixedModel(requestedModel)
       const effectiveModel = vendor === 'ccr' ? baseModel : requestedModel
@@ -139,7 +146,7 @@ class UnifiedClaudeScheduler {
       // 如果是 CCR 前缀，只在 CCR 账户池中选择
       if (vendor === 'ccr') {
         logger.info(`🎯 CCR vendor prefix detected, routing to CCR accounts only`)
-        return await this._selectCcrAccount(apiKeyData, sessionHash, effectiveModel)
+        return await this._selectCcrAccount(apiKeyData, sessionHash, effectiveModel, excludedAccounts)
       }
       // 如果API Key绑定了专属账户或分组，优先使用
       if (apiKeyData.claudeAccountId) {
@@ -278,11 +285,12 @@ class UnifiedClaudeScheduler {
         }
       }
 
-      // 获取所有可用账户（传递请求的模型进行过滤）
+      // 获取所有可用账户（传递请求的模型进行过滤，并排除指定账户）
       const availableAccounts = await this._getAllAvailableAccounts(
         apiKeyData,
         effectiveModel,
-        false // 仅前缀才走 CCR：默认池不包含 CCR 账户
+        false, // 仅前缀才走 CCR：默认池不包含 CCR 账户
+        excludedAccounts // 排除的账户列表
       )
 
       if (availableAccounts.length === 0) {
@@ -329,12 +337,15 @@ class UnifiedClaudeScheduler {
   }
 
   // 📋 获取所有可用账户（合并官方和Console）
-  async _getAllAvailableAccounts(apiKeyData, requestedModel = null, includeCcr = false) {
+  async _getAllAvailableAccounts(apiKeyData, requestedModel = null, includeCcr = false, excludedAccounts = []) {
     const availableAccounts = []
     const isOpusRequest =
       requestedModel && typeof requestedModel === 'string'
         ? requestedModel.toLowerCase().includes('opus')
         : false
+
+    // 🔄 创建排除账户的Set以便快速查找
+    const excludedSet = new Set(excludedAccounts)
 
     // 如果API Key绑定了专属账户，优先返回
     // 1. 检查Claude OAuth账户绑定
@@ -464,6 +475,12 @@ class UnifiedClaudeScheduler {
     // 获取官方Claude账户（共享池）
     const claudeAccounts = await redis.getAllClaudeAccounts()
     for (const account of claudeAccounts) {
+      // 🔄 检查是否在排除列表中
+      if (excludedSet.has(account.id)) {
+        logger.debug(`🚫 Excluding Claude official account ${account.id} from selection`)
+        continue
+      }
+
       if (
         account.isActive === 'true' &&
         account.status !== 'error' &&
@@ -510,6 +527,12 @@ class UnifiedClaudeScheduler {
     logger.info(`📋 Found ${consoleAccounts.length} total Claude Console accounts`)
 
     for (const account of consoleAccounts) {
+      // 🔄 检查是否在排除列表中
+      if (excludedSet.has(account.id)) {
+        logger.debug(`🚫 Excluding Claude Console account ${account.id} from selection`)
+        continue
+      }
+
       logger.info(
         `🔍 Checking Claude Console account: ${account.name} - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
       )
@@ -575,6 +598,12 @@ class UnifiedClaudeScheduler {
       logger.info(`📋 Found ${bedrockAccounts.length} total Bedrock accounts`)
 
       for (const account of bedrockAccounts) {
+        // 🔄 检查是否在排除列表中
+        if (excludedSet.has(account.id)) {
+          logger.debug(`🚫 Excluding Bedrock account ${account.id} from selection`)
+          continue
+        }
+
         logger.info(
           `🔍 Checking Bedrock account: ${account.name} - isActive: ${account.isActive}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
@@ -610,6 +639,12 @@ class UnifiedClaudeScheduler {
       logger.info(`📋 Found ${ccrAccounts.length} total CCR accounts`)
 
       for (const account of ccrAccounts) {
+        // 🔄 检查是否在排除列表中
+        if (excludedSet.has(account.id)) {
+          logger.debug(`🚫 Excluding CCR account ${account.id} from selection`)
+          continue
+        }
+
         logger.info(
           `🔍 Checking CCR account: ${account.name} - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
@@ -1257,36 +1292,42 @@ class UnifiedClaudeScheduler {
   }
 
   // 🎯 专门选择CCR账户（仅限CCR前缀路由使用）
-  async _selectCcrAccount(apiKeyData, sessionHash = null, effectiveModel = null) {
+  async _selectCcrAccount(apiKeyData, sessionHash = null, effectiveModel = null, excludedAccounts = []) {
     try {
       // 1. 检查会话粘性
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount && mappedAccount.accountType === 'ccr') {
-          // 验证映射的CCR账户是否仍然可用
-          const isAvailable = await this._isAccountAvailable(
-            mappedAccount.accountId,
-            mappedAccount.accountType,
-            effectiveModel
-          )
-          if (isAvailable) {
-            // 🚀 智能会话续期：续期 unified 映射键
-            await this._extendSessionMappingTTL(sessionHash)
-            logger.info(
-              `🎯 Using sticky CCR session account: ${mappedAccount.accountId} for session ${sessionHash}`
-            )
-            return mappedAccount
-          } else {
-            logger.warn(
-              `⚠️ Mapped CCR account ${mappedAccount.accountId} is no longer available, selecting new account`
-            )
+          // 🔄 检查映射的账户是否在排除列表中
+          if (excludedAccounts.includes(mappedAccount.accountId)) {
+            logger.debug(`🚫 Mapped CCR account ${mappedAccount.accountId} is in excluded list, selecting new account`)
             await this._deleteSessionMapping(sessionHash)
+          } else {
+            // 验证映射的CCR账户是否仍然可用
+            const isAvailable = await this._isAccountAvailable(
+              mappedAccount.accountId,
+              mappedAccount.accountType,
+              effectiveModel
+            )
+            if (isAvailable) {
+              // 🚀 智能会话续期：续期 unified 映射键
+              await this._extendSessionMappingTTL(sessionHash)
+              logger.info(
+                `🎯 Using sticky CCR session account: ${mappedAccount.accountId} for session ${sessionHash}`
+              )
+              return mappedAccount
+            } else {
+              logger.warn(
+                `⚠️ Mapped CCR account ${mappedAccount.accountId} is no longer available, selecting new account`
+              )
+              await this._deleteSessionMapping(sessionHash)
+            }
           }
         }
       }
 
-      // 2. 获取所有可用的CCR账户
-      const availableCcrAccounts = await this._getAvailableCcrAccounts(effectiveModel)
+      // 2. 获取所有可用的CCR账户（传递排除列表）
+      const availableCcrAccounts = await this._getAvailableCcrAccounts(effectiveModel, excludedAccounts)
 
       if (availableCcrAccounts.length === 0) {
         throw new Error(
@@ -1325,14 +1366,21 @@ class UnifiedClaudeScheduler {
   }
 
   // 📋 获取所有可用的CCR账户
-  async _getAvailableCcrAccounts(requestedModel = null) {
+  async _getAvailableCcrAccounts(requestedModel = null, excludedAccounts = []) {
     const availableAccounts = []
+    const excludedSet = new Set(excludedAccounts)
 
     try {
       const ccrAccounts = await ccrAccountService.getAllAccounts()
       logger.info(`📋 Found ${ccrAccounts.length} total CCR accounts for CCR-only selection`)
 
       for (const account of ccrAccounts) {
+        // 🔄 检查是否在排除列表中
+        if (excludedSet.has(account.id)) {
+          logger.debug(`🚫 Excluding CCR account ${account.id} from CCR-only selection`)
+          continue
+        }
+
         logger.debug(
           `🔍 Checking CCR account: ${account.name} - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
