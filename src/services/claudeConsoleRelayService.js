@@ -555,7 +555,7 @@ class ClaudeConsoleRelayService {
           // 不记录为服务器错误，因为上游可能稍后成功
         } else {
           // 其他5xx错误或客户端未断开时的504，正常记录错误
-          await this._handleServerError(accountId, response.status)
+          await this._handleServerError(accountId, response.status, response.data, requestBody.model)
         }
 
         // 返回脱敏后的错误信息
@@ -594,6 +594,9 @@ class ClaudeConsoleRelayService {
             `✅ Cleared ${errorCount} server error(s) for account ${accountId} after successful request`
           )
         }
+
+        // ✅ 记录主要模型成功（用于model_not_found错误智能判断）
+        await this._recordMainModelSuccess(accountId, requestBody.model)
       }
 
       // 更新最后使用时间
@@ -940,19 +943,15 @@ class ClaudeConsoleRelayService {
             } else if (response.status === 529) {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
             } else if (response.status >= 500 && response.status <= 504) {
-              // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
+              // 🔥 5xx错误处理：将在收集完errorData后统一处理（在 response.data.on('end') 中）
               // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
               if (response.status === 504 && clientDisconnected) {
                 logger.warn(
                   `⚠️ [STREAM] 504 Gateway Timeout while client disconnected - likely intermediate proxy timeout, not marking account as error | Acc: ${account?.name}`
                 )
                 // 不记录为服务器错误，因为上游可能稍后成功
-              } else {
-                // 其他5xx错误或客户端未断开时的504，正常记录错误
-                this._handleServerError(accountId, response.status).catch((err) => {
-                  logger.error(`Failed to handle server error: ${err.message}`)
-                })
               }
+              // Note: 错误处理将在 response.data.on('end') 中统一执行，届时errorData已收集完成
             }
 
             // 🛡️ 发送脱敏后的错误信息而不是透传原始错误
@@ -962,6 +961,15 @@ class ClaudeConsoleRelayService {
             })
 
             response.data.on('end', () => {
+              // 🎯 在发送错误前，先处理 model_not_found 错误（如果适用）
+              if (response.status >= 500 && response.status <= 504 && errorData) {
+                this._handleServerError(accountId, response.status, errorData, body.model).catch(
+                  (err) => {
+                    logger.error(`Failed to handle server error in stream end: ${err.message}`)
+                  }
+                )
+              }
+
               // 使用脱敏处理发送错误
               this._sendSanitizedStreamError(responseStream, response.status, errorData, accountId)
               resolve()
@@ -992,6 +1000,11 @@ class ClaudeConsoleRelayService {
             .catch((err) => {
               logger.error(`Failed to clear server errors: ${err.message}`)
             })
+
+          // ✅ 记录主要模型成功（用于model_not_found错误智能判断）
+          this._recordMainModelSuccess(accountId, body.model).catch((err) => {
+            logger.error(`Failed to record main model success: ${err.message}`)
+          })
 
           // 设置响应头
           if (!responseStream.headersSent) {
@@ -1183,7 +1196,12 @@ class ClaudeConsoleRelayService {
                 // 不记录为服务器错误，因为上游可能稍后成功
               } else {
                 // 其他5xx错误或客户端未断开时的504，正常记录错误
-                this._handleServerError(accountId, error.response.status).catch((err) => {
+                this._handleServerError(
+                  accountId,
+                  error.response.status,
+                  error.response.data,
+                  body.model
+                ).catch((err) => {
                   logger.error(`Failed to handle server error: ${err.message}`)
                 })
               }
@@ -1290,8 +1308,49 @@ class ClaudeConsoleRelayService {
   }
 
   // 🔥 统一的5xx错误处理方法（记录错误并检查阈值）
-  async _handleServerError(accountId, statusCode) {
+  async _handleServerError(accountId, statusCode, errorData = null, requestedModel = null) {
     try {
+      // 🎯 特殊处理：检查是否为 model_not_found 错误
+      let isModelNotFound = false
+      if (errorData) {
+        const errorStr =
+          typeof errorData === 'string' ? errorData : JSON.stringify(errorData)
+        isModelNotFound =
+          errorStr.includes('model_not_found') ||
+          errorStr.includes('无可用渠道') ||
+          errorStr.includes('distributor')
+      }
+
+      if (isModelNotFound) {
+        // 🧠 智能判断：区分主要模型和次要模型
+        const isMainModel = this._isMainClaudeModel(requestedModel)
+
+        if (isMainModel) {
+          // 主要模型（sonnet/opus）不支持 → 账号确实有问题，正常计数
+          logger.warn(
+            `⚠️ Main model "${requestedModel}" not found for account ${accountId} - counting as account error`
+          )
+          // 继续执行正常的错误计数逻辑
+        } else {
+          // 次要模型（haiku等）不支持 → 检查账号是否支持过任何主要模型
+          const hasMainModelSuccess = await this._checkAccountMainModelSupport(accountId)
+
+          if (hasMainModelSuccess) {
+            // 账号支持过主要模型，说明账号正常，只是不支持这个次要模型
+            logger.warn(
+              `ℹ️ Minor model "${requestedModel}" not found for account ${accountId}, but main models work - not counting as account error`
+            )
+            return // 不记录错误计数，直接返回
+          } else {
+            // 从未成功过主要模型，可能账号本身有问题
+            logger.warn(
+              `⚠️ Model "${requestedModel}" not found and no main model success history - counting as account error`
+            )
+            // 继续执行正常的错误计数逻辑
+          }
+        }
+      }
+
       // 记录错误
       await claudeConsoleAccountService.recordServerError(accountId, statusCode)
       const errorCount = await claudeConsoleAccountService.getServerErrorCount(accountId)
@@ -1323,6 +1382,49 @@ class ClaudeConsoleRelayService {
       }
     } catch (handlingError) {
       logger.error(`❌ Failed to handle server error for account ${accountId}:`, handlingError)
+    }
+  }
+
+  // 🧠 判断是否为主要Claude模型
+  _isMainClaudeModel(model) {
+    if (!model) return false
+    const modelLower = model.toLowerCase()
+    return (
+      modelLower.includes('sonnet') ||
+      modelLower.includes('opus') ||
+      modelLower.includes('claude-3-5-sonnet') ||
+      modelLower.includes('claude-3-opus')
+    )
+  }
+
+  // 🔍 检查账号是否有主要模型的成功记录
+  async _checkAccountMainModelSupport(accountId) {
+    try {
+      const redis = require('../models/redis').getClientSafe()
+      const key = `claude_console_account:${accountId}:main_model_success`
+
+      // 检查是否有主要模型成功标记（7天内）
+      const hasSuccess = await redis.get(key)
+      return hasSuccess === 'true'
+    } catch (error) {
+      logger.error(`Failed to check main model support for account ${accountId}:`, error)
+      return false // 出错时保守处理
+    }
+  }
+
+  // ✅ 记录主要模型成功请求（在成功响应时调用）
+  async _recordMainModelSuccess(accountId, model) {
+    try {
+      if (this._isMainClaudeModel(model)) {
+        const redis = require('../models/redis').getClientSafe()
+        const key = `claude_console_account:${accountId}:main_model_success`
+
+        // 设置7天过期时间
+        await redis.setex(key, 7 * 24 * 60 * 60, 'true')
+        logger.debug(`✅ Recorded main model success for account ${accountId}: ${model}`)
+      }
+    } catch (error) {
+      logger.error(`Failed to record main model success for account ${accountId}:`, error)
     }
   }
 

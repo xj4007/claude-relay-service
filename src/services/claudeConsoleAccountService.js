@@ -147,12 +147,13 @@ class ClaudeConsoleAccountService {
       const accounts = []
 
       for (const key of keys) {
-        // 🔧 跳过非账户键（如 slow_responses、5xx_errors、stream_timeouts 等辅助数据）
+        // 🔧 跳过非账户键（如 slow_responses、5xx_errors、stream_timeouts、main_model_success 等辅助数据）
         if (
           key.includes(':slow_responses') ||
           key.includes(':5xx_errors') ||
           key.includes(':temp_error') ||
-          key.includes(':stream_timeouts')
+          key.includes(':stream_timeouts') ||
+          key.includes(':main_model_success')
         ) {
           continue
         }
