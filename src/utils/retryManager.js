@@ -57,6 +57,66 @@ class RetryManager {
   }
 
   /**
+   * 检测是否为需要强制切换账号的特殊错误（如 Cloudflare 524、官方 400）
+   * @param {Object} response - 上游响应
+   * @returns {string|null} - 需要切换账号时返回原因描述，否则返回 null
+   */
+  _shouldSwitchAccountForSpecialError(response) {
+    if (!response || !response.statusCode) {
+      return null
+    }
+
+    const { statusCode } = response
+    let bodyText = ''
+
+    if (typeof response.body === 'string') {
+      bodyText = response.body
+    } else if (response.body !== undefined && response.body !== null) {
+      try {
+        bodyText = JSON.stringify(response.body)
+      } catch (error) {
+        bodyText = String(response.body)
+      }
+    }
+
+    const normalizedText = bodyText.toLowerCase()
+
+    if (statusCode === 400) {
+      const thinkingMismatch =
+        normalizedText.includes('expected `thinking`') &&
+        normalizedText.includes('found `tool_use`')
+
+      if (thinkingMismatch) {
+        return 'thinking/tool_use format mismatch'
+      }
+
+      const officialInternalError =
+        normalizedText.includes('"type":"internal_error"') ||
+        normalizedText.includes('\'type\':\'internal_error\'') ||
+        normalizedText.includes('server internal error, please contact admin')
+
+      if (officialInternalError) {
+        return 'official internal error 400'
+      }
+
+      // 🆕 检测 thinking.budget_tokens 相关错误
+      const thinkingBudgetError =
+        normalizedText.includes('max_tokens') &&
+        normalizedText.includes('thinking.budget_tokens')
+
+      if (thinkingBudgetError) {
+        return 'thinking budget tokens validation error'
+      }
+    }
+
+    if (statusCode === 524) {
+      return 'cloudflare timeout 524'
+    }
+
+    return null
+  }
+
+  /**
    * 执行带重试的请求
    * @param {Function} requestFn - 请求函数 async (accountId, accountType) => response
    * @param {Function} accountSelectorFn - 账户选择函数 async (excludedAccounts) => { accountId, accountType }
@@ -103,6 +163,24 @@ class RetryManager {
             accountId,
             accountType
           }
+        }
+
+        const specialErrorReason = this._shouldSwitchAccountForSpecialError(response)
+        if (specialErrorReason) {
+          excludedAccounts.add(accountId)
+          lastError = new Error(`HTTP ${response.statusCode}: ${response.body}`)
+          const hasMoreAttempts = attempt < maxRetries
+          logger.warn(
+            hasMoreAttempts
+              ? `⚠️ Detected non-retryable ${response.statusCode} (${specialErrorReason}) on account ${accountId}, switching to another account`
+              : `⚠️ Detected non-retryable ${response.statusCode} (${specialErrorReason}) on account ${accountId}, but no alternative accounts available`
+          )
+
+          if (hasMoreAttempts) {
+            continue
+          }
+
+          break
         }
 
         // 检查是否可重试

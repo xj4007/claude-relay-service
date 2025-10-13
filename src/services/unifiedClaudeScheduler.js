@@ -160,7 +160,8 @@ class UnifiedClaudeScheduler {
             groupId,
             sessionHash,
             effectiveModel,
-            vendor === 'ccr'
+            vendor === 'ccr',
+            excludedAccounts
           )
         }
 
@@ -255,8 +256,14 @@ class UnifiedClaudeScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
-          // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
-          if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
+          // 🔄 检查映射的账户是否在排除列表中
+          if (excludedAccounts.includes(mappedAccount.accountId)) {
+            logger.info(
+              `🚫 Mapped account ${mappedAccount.accountId} is in excluded list, selecting new account`
+            )
+            await this._deleteSessionMapping(sessionHash)
+          } else if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
+            // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
             logger.info(
               `ℹ️ Skipping CCR sticky session mapping for non-CCR request; removing mapping for session ${sessionHash}`
             )
@@ -1117,7 +1124,8 @@ class UnifiedClaudeScheduler {
     groupId,
     sessionHash = null,
     requestedModel = null,
-    allowCcr = false
+    allowCcr = false,
+    excludedAccounts = []
   ) {
     try {
       // 获取分组信息
@@ -1135,8 +1143,14 @@ class UnifiedClaudeScheduler {
           // 验证映射的账户是否属于这个分组
           const memberIds = await accountGroupService.getGroupMembers(groupId)
           if (memberIds.includes(mappedAccount.accountId)) {
-            // 非 CCR 请求时不允许 CCR 粘性映射
-            if (!allowCcr && mappedAccount.accountType === 'ccr') {
+            // 🔄 检查映射的账户是���在排除列表中
+            if (excludedAccounts.includes(mappedAccount.accountId)) {
+              logger.info(
+                `🚫 Mapped account ${mappedAccount.accountId} in group is in excluded list, selecting new account`
+              )
+              await this._deleteSessionMapping(sessionHash)
+            } else if (!allowCcr && mappedAccount.accountType === 'ccr') {
+              // 非 CCR 请求时不允许 CCR 粘性映射
               await this._deleteSessionMapping(sessionHash)
             } else {
               const isAvailable = await this._isAccountAvailable(
