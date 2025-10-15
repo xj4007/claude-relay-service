@@ -6,6 +6,7 @@ const accountGroupService = require('./accountGroupService')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { parseVendorPrefixedModel } = require('../utils/modelHelper')
+const config = require('../../config/config')
 
 class UnifiedClaudeScheduler {
   constructor() {
@@ -252,43 +253,15 @@ class UnifiedClaudeScheduler {
 
       // CCR 账户不支持绑定（仅通过 ccr, 前缀进行 CCR 路由）
 
-      // 如果有会话哈希，检查是否有已映射的账户
+      // 如果有会话哈希，优先尝试复用粘性会话映射
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
-        if (mappedAccount) {
-          // 🔄 检查映射的账户是否在排除列表中
-          if (excludedAccounts.includes(mappedAccount.accountId)) {
-            logger.info(
-              `🚫 Mapped account ${mappedAccount.accountId} is in excluded list, selecting new account`
-            )
-            await this._deleteSessionMapping(sessionHash)
-          } else if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
-            // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
-            logger.info(
-              `ℹ️ Skipping CCR sticky session mapping for non-CCR request; removing mapping for session ${sessionHash}`
-            )
-            await this._deleteSessionMapping(sessionHash)
-          } else {
-            // 验证映射的账户是否仍然可用
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType,
-              effectiveModel
-            )
-            if (isAvailable) {
-              // 🚀 智能会话续期：剩余时间少于14天时自动续期到15天（续期正确的 unified 映射键）
-              await this._extendSessionMappingTTL(sessionHash)
-              logger.info(
-                `🎯 Using sticky session account: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
-              )
-              return mappedAccount
-            } else {
-              logger.warn(
-                `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
-              )
-              await this._deleteSessionMapping(sessionHash)
-            }
-          }
+        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, effectiveModel, {
+          excludedAccounts,
+          vendor
+        })
+        if (reusedAccount) {
+          return reusedAccount
         }
       }
 
@@ -719,6 +692,144 @@ class UnifiedClaudeScheduler {
     })
   }
 
+  _delay(ms) {
+    if (!ms || ms <= 0) {
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  async _ensureStickyConsoleConcurrency(accountId, sessionHash = null) {
+    try {
+      const account = await claudeConsoleAccountService.getAccount(accountId)
+      if (!account) {
+        if (sessionHash) {
+          logger.warn(
+            `⚠️ Sticky session account ${accountId} missing when checking concurrency for session ${sessionHash}`
+          )
+        } else {
+          logger.warn(`⚠️ Sticky session account ${accountId} missing when checking concurrency`)
+        }
+        return false
+      }
+
+      const limit = parseInt(account.accountConcurrencyLimit) || 0
+      if (limit <= 0) {
+        return true
+      }
+
+      let currentConcurrency = await claudeConsoleAccountService.getAccountConcurrency(accountId)
+      if (currentConcurrency < limit) {
+        return true
+      }
+
+      const stickyCfg = (config.session && config.session.stickyConcurrency) || {}
+      const waitEnabled = stickyCfg.waitEnabled !== false
+      if (!waitEnabled) {
+        logger.debug(
+          `⏸️ Sticky account ${accountId} concurrency ${currentConcurrency}/${limit}, wait disabled -> fallback immediately`
+        )
+        return false
+      }
+
+      const pollInterval = Math.max(50, parseInt(stickyCfg.pollIntervalMs, 10) || 200)
+      const maxWaitMs = Math.max(pollInterval, parseInt(stickyCfg.maxWaitMs, 10) || 1200)
+      const deadline = Date.now() + maxWaitMs
+      let polls = 0
+
+      while (Date.now() < deadline) {
+        polls += 1
+        await this._delay(pollInterval)
+        currentConcurrency = await claudeConsoleAccountService.getAccountConcurrency(accountId)
+        if (currentConcurrency < limit) {
+          logger.info(
+            `🕒 Sticky concurrency wait succeeded for account ${accountId}: ${currentConcurrency}/${limit} after ${polls} poll(s)` +
+              (sessionHash ? ` | session ${sessionHash}` : '')
+          )
+          return true
+        }
+      }
+
+      logger.warn(
+        `⌛ Sticky account ${accountId} still at limit (${currentConcurrency}/${limit}) after waiting ${maxWaitMs}ms` +
+          (sessionHash ? ` | session ${sessionHash}` : '')
+      )
+      return false
+    } catch (error) {
+      logger.error(`❌ Failed to evaluate sticky concurrency for account ${accountId}:`, error)
+      return false
+    }
+  }
+
+  async _tryReuseStickyMapping(sessionHash, mappedAccount, effectiveModel, options = {}) {
+    if (!sessionHash || !mappedAccount) {
+      return null
+    }
+
+    const { excludedAccounts = [], vendor = null, allowedAccountIds = null } = options
+    const accountId = mappedAccount.accountId
+    const accountType = mappedAccount.accountType
+
+    if (!accountId || !accountType) {
+      await this._deleteSessionMapping(sessionHash)
+      return null
+    }
+
+    const excludedSet = new Set(excludedAccounts || [])
+    if (excludedSet.has(accountId)) {
+      logger.info(`🚫 Mapped account ${accountId} is in excluded list, selecting new account`)
+      await this._deleteSessionMapping(sessionHash)
+      return null
+    }
+
+    if (allowedAccountIds && !allowedAccountIds.has(accountId)) {
+      logger.info(
+        `ℹ️ Sticky account ${accountId} not allowed for current pool, removing mapping for session ${sessionHash}`
+      )
+      await this._deleteSessionMapping(sessionHash)
+      return null
+    }
+
+    if (vendor === 'ccr' && accountType !== 'ccr') {
+      logger.info(
+        `ℹ️ Sticky mapping for session ${sessionHash} points to ${accountType}, but CCR vendor was requested. Removing mapping.`
+      )
+      await this._deleteSessionMapping(sessionHash)
+      return null
+    }
+
+    if (vendor !== 'ccr' && accountType === 'ccr') {
+      logger.info(
+        `ℹ️ Skipping CCR sticky session mapping for non-CCR request; removing mapping for session ${sessionHash}`
+      )
+      await this._deleteSessionMapping(sessionHash)
+      return null
+    }
+
+    if (accountType === 'claude-console') {
+      const ready = await this._ensureStickyConsoleConcurrency(accountId, sessionHash)
+      if (!ready) {
+        await this._deleteSessionMapping(sessionHash)
+        return null
+      }
+    }
+
+    const isAvailable = await this._isAccountAvailable(accountId, accountType, effectiveModel)
+    if (isAvailable) {
+      await this._extendSessionMappingTTL(sessionHash)
+      logger.info(
+        `🎯 Using sticky session account: ${accountId} (${accountType}) for session ${sessionHash}`
+      )
+      return mappedAccount
+    }
+
+    logger.warn(
+      `⚠️ Mapped account ${accountId} is no longer available, selecting new account for session ${sessionHash}`
+    )
+    await this._deleteSessionMapping(sessionHash)
+    return null
+  }
+
   // 🔍 检查账户是否可用
   async _isAccountAvailable(accountId, accountType, requestedModel = null) {
     try {
@@ -924,8 +1035,7 @@ class UnifiedClaudeScheduler {
     const client = redis.getClientSafe()
     const mappingData = JSON.stringify({ accountId, accountType })
     // 依据配置设置TTL（小时）
-    const appConfig = require('../../config/config')
-    const ttlHours = appConfig.session?.stickyTtlHours || 1
+    const ttlHours = config.session?.stickyTtlHours || 1
     const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
     await client.setex(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`, ttlSeconds, mappingData)
   }
@@ -951,9 +1061,8 @@ class UnifiedClaudeScheduler {
         return true
       }
 
-      const appConfig = require('../../config/config')
-      const ttlHours = appConfig.session?.stickyTtlHours || 1
-      const renewalThresholdMinutes = appConfig.session?.renewalThresholdMinutes || 0
+      const ttlHours = config.session?.stickyTtlHours || 1
+      const renewalThresholdMinutes = config.session?.renewalThresholdMinutes || 0
 
       // 阈值为0则不续期
       if (!renewalThresholdMinutes) {
@@ -1136,47 +1245,23 @@ class UnifiedClaudeScheduler {
 
       logger.info(`👥 Selecting account from group: ${group.name} (${group.platform})`)
 
-      // 如果有会话哈希，检查是否有已映射的账户
-      if (sessionHash) {
-        const mappedAccount = await this._getSessionMapping(sessionHash)
-        if (mappedAccount) {
-          // 验证映射的账户是否属于这个分组
-          const memberIds = await accountGroupService.getGroupMembers(groupId)
-          if (memberIds.includes(mappedAccount.accountId)) {
-            // 🔄 检查映射的账户是���在排除列表中
-            if (excludedAccounts.includes(mappedAccount.accountId)) {
-              logger.info(
-                `🚫 Mapped account ${mappedAccount.accountId} in group is in excluded list, selecting new account`
-              )
-              await this._deleteSessionMapping(sessionHash)
-            } else if (!allowCcr && mappedAccount.accountType === 'ccr') {
-              // 非 CCR 请求时不允许 CCR 粘性映射
-              await this._deleteSessionMapping(sessionHash)
-            } else {
-              const isAvailable = await this._isAccountAvailable(
-                mappedAccount.accountId,
-                mappedAccount.accountType,
-                requestedModel
-              )
-              if (isAvailable) {
-                // 🚀 智能会话续期：续期 unified 映射键
-                await this._extendSessionMappingTTL(sessionHash)
-                logger.info(
-                  `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
-                )
-                return mappedAccount
-              }
-            }
-          }
-          // 如果映射的账户不可用或不在分组中，删除映射
-          await this._deleteSessionMapping(sessionHash)
-        }
-      }
-
-      // 获取分组内的所有账户
       const memberIds = await accountGroupService.getGroupMembers(groupId)
+      const memberIdSet = new Set(memberIds)
+
       if (memberIds.length === 0) {
         throw new Error(`Group ${group.name} has no members`)
+      }
+
+      if (sessionHash) {
+        const mappedAccount = await this._getSessionMapping(sessionHash)
+        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, requestedModel, {
+          excludedAccounts,
+          vendor: allowCcr ? 'ccr' : null,
+          allowedAccountIds: memberIdSet
+        })
+        if (reusedAccount) {
+          return reusedAccount
+        }
       }
 
       const availableAccounts = []
@@ -1311,32 +1396,12 @@ class UnifiedClaudeScheduler {
       // 1. 检查会话粘性
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
-        if (mappedAccount && mappedAccount.accountType === 'ccr') {
-          // 🔄 检查映射的账户是否在排除列表中
-          if (excludedAccounts.includes(mappedAccount.accountId)) {
-            logger.debug(`🚫 Mapped CCR account ${mappedAccount.accountId} is in excluded list, selecting new account`)
-            await this._deleteSessionMapping(sessionHash)
-          } else {
-            // 验证映射的CCR账户是否仍然可用
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType,
-              effectiveModel
-            )
-            if (isAvailable) {
-              // 🚀 智能会话续期：续期 unified 映射键
-              await this._extendSessionMappingTTL(sessionHash)
-              logger.info(
-                `🎯 Using sticky CCR session account: ${mappedAccount.accountId} for session ${sessionHash}`
-              )
-              return mappedAccount
-            } else {
-              logger.warn(
-                `⚠️ Mapped CCR account ${mappedAccount.accountId} is no longer available, selecting new account`
-              )
-              await this._deleteSessionMapping(sessionHash)
-            }
-          }
+        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, effectiveModel, {
+          excludedAccounts,
+          vendor: 'ccr'
+        })
+        if (reusedAccount) {
+          return reusedAccount
         }
       }
 

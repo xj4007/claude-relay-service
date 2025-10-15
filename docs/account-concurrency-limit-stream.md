@@ -128,6 +128,29 @@ async getAccountConcurrency(accountId) {
 - ✅ 高并发场景下性能更好
 - ✅ 游标迭代，内存占用更低
 
+#### ✅ 新增：粘性会话并发守护（2025-10）
+
+- 位置：`src/services/unifiedClaudeScheduler.js`
+- 作用：同一会话复用 Console 账号前先确认并发余量
+  - 若已满并且守护开启，则按照 `session.stickyConcurrency.pollIntervalMs` 轮询
+  - 最长等待 `session.stickyConcurrency.maxWaitMs`，期间一旦释放并发即继续复用
+  - 超时仍满载时会清理粘性映射并切换到其他可用账号
+- 配置入口：`config/config.js` → `session.stickyConcurrency`
+
+```javascript
+session: {
+  stickyTtlHours: 1,
+  renewalThresholdMinutes: 0,
+  stickyConcurrency: {
+    waitEnabled: process.env.STICKY_CONCURRENCY_WAIT_ENABLED !== 'false',
+    maxWaitMs: parseInt(process.env.STICKY_CONCURRENCY_MAX_WAIT_MS) || 1200,
+    pollIntervalMs: parseInt(process.env.STICKY_CONCURRENCY_POLL_INTERVAL_MS) || 200
+  }
+}
+```
+
+> ℹ️ 流式请求建议保留默认 200ms 轮询 + 1.2s 总等待，既能复用上下文又能在阻塞时快速切换账号。
+
 ---
 
 ## 🔍 Redis 查询和管理命令

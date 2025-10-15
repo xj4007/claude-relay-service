@@ -81,7 +81,7 @@ const selection = await unifiedClaudeScheduler.selectAccountForApiKey(
 ```
 
 > ℹ️ Claude Console 账户在 5 分钟内累计 3 次 5xx/504 错误时会被标记为 `temp_error`，调度器会在粘性会话阶段自动跳过这些账户，确保后续重试真正切换到新的账号。
-> 🆕 如果上游返回 `Too many active sessions`（例如 88code 并发限制），当前账号会立即被置为 `temp_error` 并暂停 6 分钟，后续重试会跳过该账号。
+> 🆕 如果上游返回 `Too many active sessions`（例如 88code 并发限制），当前账号会立即被置为 `temp_error` 并暂停 6 分钟。2025-10 起，粘性会话还会先按照 `session.stickyConcurrency` 配置短暂等待（默认 200ms 轮询、1.2s 封顶）；等待仍未释放并发时，会立刻删除粘性映射并切换到其他账号，避免重试继续落在相同账户上。
 
 ### 3. 错误判断和重试决策
 ```javascript

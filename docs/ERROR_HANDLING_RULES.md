@@ -52,7 +52,7 @@
 | **503** | 服务不可用 | 3次 | 5分钟 | `markAccountTempError()` |
 | **504** | 网关超时 | 3次 | 5分钟 | `markAccountTempError()` |
 
-> 🆕 当上游供应商（例如 88code）返回 `Too many active sessions` 或类似并发限制提示时，会立即调用 `markAccountTempError()` 暂停该账号 6 分钟，并在恢复时自动清理粘性会话映射。
+> 🆕 当上游供应商（例如 88code）返回 `Too many active sessions` 或类似并发限制提示时，系统会先触发粘性会话并发守护：尝试在 1.2 秒封顶窗口内复用原账号；若仍满载则立刻切换账号并调用 `markAccountTempError()` 暂停该账号 6 分钟，恢复后自动清理粘性会话映射。
 
 ---
 
@@ -207,6 +207,9 @@ if (response.status === 200 || response.status === 201) {
 | **错误窗口** | 5 分钟 | `claudeConsoleAccountService.js:1356` | Redis TTL，滑动窗口 |
 | **自动恢复时间** | 6 分钟 | `claudeConsoleAccountService.js:1472` | temp_error 状态持续时间 |
 | **过载恢复时间** | 10 分钟 | `claudeConsoleAccountService.js:851` | overloaded 状态持续时间 |
+| **粘性等待开关** | true | `config/config.js` → `session.stickyConcurrency.waitEnabled` | 是否在粘性会话上限时先短暂等待 |
+| **粘性等待上限** | 1200 ms | `config/config.js` → `session.stickyConcurrency.maxWaitMs` | 单次粘性守护最长等待时长 |
+| **粘性轮询间隔** | 200 ms | `config/config.js` → `session.stickyConcurrency.pollIntervalMs` | 检查并发是否释放的轮询间隔 |
 
 ### 如何修改配置
 
@@ -229,6 +232,26 @@ await client.expire(key, 600) // 原来是 300（5分钟）
 ```javascript
 // src/services/claudeConsoleAccountService.js:1472
 }, 3 * 60 * 1000) // 原来是 6 * 60 * 1000
+```
+
+#### 调整粘性会话等待策略
+
+```javascript
+// config/config.js
+session: {
+  stickyConcurrency: {
+    waitEnabled: process.env.STICKY_CONCURRENCY_WAIT_ENABLED !== 'false',
+    maxWaitMs: parseInt(process.env.STICKY_CONCURRENCY_MAX_WAIT_MS) || 1200,
+    pollIntervalMs: parseInt(process.env.STICKY_CONCURRENCY_POLL_INTERVAL_MS) || 200
+  }
+}
+```
+
+```bash
+# 示例：缩短等待窗口，加快切换账号
+export STICKY_CONCURRENCY_WAIT_ENABLED=true
+export STICKY_CONCURRENCY_MAX_WAIT_MS=800
+export STICKY_CONCURRENCY_POLL_INTERVAL_MS=150
 ```
 
 ---

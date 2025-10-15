@@ -352,6 +352,33 @@ async _isAccountAvailable(accountId, accountType, model) {
 - 避免无效的请求尝试
 - 提高调度效率
 
+#### 粘性会话并发守护（2025-10 更新）
+
+- 位置：`src/services/unifiedClaudeScheduler.js`
+- 新增 `_ensureStickyConsoleConcurrency()` 与 `_tryReuseStickyMapping()`，在复用粘性会话前：
+  - 先读取账户当前并发计数
+  - 若已到上限且启用守护机制，则按 `pollIntervalMs` 轮询等待，最长 `maxWaitMs`
+  - 等待窗口内一旦释放并发，即继续复用原账号
+  - 若等待超时仍满载，自动删除粘性映射，改用新账号，避免用户长时间阻塞
+- 配套配置位于 `config/config.js` → `session.stickyConcurrency`：
+
+```javascript
+session: {
+  stickyTtlHours: 1,
+  renewalThresholdMinutes: 0,
+  stickyConcurrency: {
+    waitEnabled: process.env.STICKY_CONCURRENCY_WAIT_ENABLED !== 'false',
+    maxWaitMs: parseInt(process.env.STICKY_CONCURRENCY_MAX_WAIT_MS) || 1200,
+    pollIntervalMs: parseInt(process.env.STICKY_CONCURRENCY_POLL_INTERVAL_MS) || 200
+  }
+}
+```
+
+> 📝 建议维持默认 1.2 秒封顶等待，可根据负载情况调节：
+> - 将 `waitEnabled` 设为 `false` 可直接切换账号（旧行为）
+> - 增大 `maxWaitMs` 适合高并发但延迟敏感度低的业务
+> - 缩短 `pollIntervalMs` 可更快捕获空闲，但会略微增加 Redis 压力
+
 ---
 
 ### 5. API 路由实现
@@ -457,6 +484,7 @@ const updateAccount = async () => {
 4. **保存配置**
    - 点击 "创建账户" 或 "更新账户"
    - 配置立即生效
+   - 若业务需要微调粘性会话等待策略，可同步更新 `STICKY_CONCURRENCY_WAIT_ENABLED`、`STICKY_CONCURRENCY_MAX_WAIT_MS`、`STICKY_CONCURRENCY_POLL_INTERVAL_MS` 环境变量
 
 ### 推荐配置值
 
@@ -504,6 +532,15 @@ const updateAccount = async () => {
   "accountConcurrencyLimit": 3,
   "priority": 20  // 低优先级，仅在A/B不可用时使用
 }
+```
+
+#### 示例3：粘性等待相关环境变量
+
+```bash
+# 缩短粘性等待窗口，遇到并发堵塞时更快切换账号
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=800
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=150
 ```
 
 ---

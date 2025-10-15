@@ -23,7 +23,7 @@
 - **定义**: 同一个sessionHash在TTL期间内始终使用同一个供应商账户
 - **目的**: 保持对话上下文连续性，避免频繁切换账户
 - **续期策略**: 智能续期，剩余时间少于阈值时自动续期
-> ⚠️ 如果粘性的账户进入 `temp_error` 或 `rate_limited` 等非可用状态，调度器会删除映射并重新选取账户。Claude Console 账户在 5 分钟内出现 3 次 5xx/504 错误，或遇到 88code 并发限制（`Too many active sessions`），都会自动被标记为 `temp_error` 并至少暂停 6 分钟。
+> ⚠️ 如果粘性的账户进入 `temp_error` 或 `rate_limited` 等非可用状态，调度器会删除映射并重新选取账户。Claude Console 账户在 5 分钟内出现 3 次 5xx/504 错误，或遇到 88code 并发限制（`Too many active sessions`），都会自动被标记为 `temp_error` 并至少暂停 6 分钟。自 2025-10 起，当粘性账户并发达到上限时，调度器会按 `session.stickyConcurrency` 配置短暂轮询（默认 200ms 间隔、1.2s 封顶）；若超时仍满载，则立即删除粘性映射并切换到其他账号，避免会话长时间阻塞。
 
 ## sessionHash 生成规则
 
@@ -246,7 +246,14 @@ session: {
   stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 1,
   
   // 续期阈值（分钟），默认0分钟（不续期）
-  renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0
+  renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0,
+
+  // 粘性会话并发守护：并发打满时的短暂轮询策略
+  stickyConcurrency: {
+    waitEnabled: process.env.STICKY_CONCURRENCY_WAIT_ENABLED !== 'false',
+    maxWaitMs: parseInt(process.env.STICKY_CONCURRENCY_MAX_WAIT_MS) || 1200,
+    pollIntervalMs: parseInt(process.env.STICKY_CONCURRENCY_POLL_INTERVAL_MS) || 200
+  }
 }
 ```
 
@@ -257,6 +264,11 @@ STICKY_SESSION_TTL_HOURS=2
 
 # 续期阈值（分钟），剩余时间少于此值时自动续期
 STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES=30
+
+# 粘性并发守护（可选）
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=1200
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=200
 ```
 
 ### Redis键名格式
@@ -299,6 +311,16 @@ sticky_session:{sessionHash}                  # 传统会话映射（兼容）
 1. 检查账户优先级配置
 2. 查看账户错误日志
 3. 确认 `lastUsedAt` 更新正常
+
+### 问题4: 粘性会话长时间等待同一账号
+**可能原因**:
+- 粘性目标账号并发已满且等待窗口设置过长
+- `STICKY_CONCURRENCY_WAIT_ENABLED` 关闭，导致始终尝试复用旧会话
+
+**排查步骤**:
+1. 检查调度器日志中 `Sticky concurrency wait` 和 `⌛ Sticky account` 提示
+2. 查看 `config/config.js` 中 `session.stickyConcurrency` 配置
+3. 适当缩短 `STICKY_CONCURRENCY_MAX_WAIT_MS` 或扩充账号池
 
 ### 调试技巧
 
