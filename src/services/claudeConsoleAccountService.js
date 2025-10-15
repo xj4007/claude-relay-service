@@ -1343,7 +1343,10 @@ class ClaudeConsoleAccountService {
         'overloadedAt',
         'overloadStatus',
         'blockedAt',
-        'quotaStoppedAt'
+        'quotaStoppedAt',
+        'tempErrorAt',
+        'tempErrorAutoStopped',
+        'tempErrorMetadata'
       ]
 
       // 执行更新
@@ -1444,7 +1447,7 @@ class ClaudeConsoleAccountService {
   }
 
   // ⚠️ 标记账号为临时错误状态（连续5xx错误后）
-  async markAccountTempError(accountId) {
+  async markAccountTempError(accountId, options = {}) {
     try {
       const client = redis.getClientSafe()
       const accountData = await this.getAccount(accountId)
@@ -1453,33 +1456,45 @@ class ClaudeConsoleAccountService {
         throw new Error('Account not found')
       }
 
+      const {
+        reason = 'Account temporarily disabled due to consecutive 5xx errors',
+        autoRecoveryMinutes = 5,
+        metadata = {},
+        errorCode = 'CONSECUTIVE_5XX_ERRORS'
+      } = options
+
+      const safeRecoveryMinutes = Math.max(autoRecoveryMinutes || 0, 1)
+      const safetyBufferMs = 60 * 1000 // 额外1分钟缓冲，确保达到目标时间
+      const recoveryDelayMs = safeRecoveryMinutes * 60 * 1000
+
       // 更新账户状态
       const updates = {
         status: 'temp_error',
         schedulable: 'false', // 停止调度
-        errorMessage: 'Account temporarily disabled due to consecutive 5xx errors',
+        errorMessage: reason,
         tempErrorAt: new Date().toISOString(),
-        tempErrorAutoStopped: 'true' // 标记为自动停止
+        tempErrorAutoStopped: 'true', // 标记为自动停止
+        tempErrorMetadata: JSON.stringify(metadata || {})
       }
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
       logger.warn(
-        `⚠️ Claude Console account ${accountData.name} (${accountId}) marked as temp_error and disabled for scheduling`
+        `⚠️ Claude Console account ${accountData.name} (${accountId}) marked as temp_error and disabled for scheduling | Reason: ${reason} | Auto-recovery: ${safeRecoveryMinutes}min`
       )
 
-      // 设置 5 分钟后自动恢复
+      // 设置自动恢复
       setTimeout(
         async () => {
           try {
             const account = await this.getAccount(accountId)
             if (account && account.status === 'temp_error' && account.tempErrorAt) {
-              // 验证是否确实过了 5 分钟
+              // 验证是否已经达到自动恢复时间
               const tempErrorAt = new Date(account.tempErrorAt)
               const now = new Date()
               const minutesSince = (now - tempErrorAt) / (1000 * 60)
 
-              if (minutesSince >= 5) {
+              if (minutesSince >= safeRecoveryMinutes) {
                 // 恢复账户
                 const recoveryUpdates = {
                   status: 'active',
@@ -1493,14 +1508,15 @@ class ClaudeConsoleAccountService {
                   `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
                   'errorMessage',
                   'tempErrorAt',
-                  'tempErrorAutoStopped'
+                  'tempErrorAutoStopped',
+                  'tempErrorMetadata'
                 )
 
                 // 清除 5xx 错误计数
                 await this.clearServerErrors(accountId)
 
                 logger.success(
-                  `✅ Auto-recovered temp_error after 5 minutes: ${account.name} (${accountId})`
+                  `✅ Auto-recovered temp_error after ${safeRecoveryMinutes} minutes: ${account.name} (${accountId})`
                 )
 
                 // 发送恢复通知
@@ -1512,7 +1528,7 @@ class ClaudeConsoleAccountService {
                     platform: 'claude-console',
                     status: 'recovered',
                     errorCode: 'TEMP_ERROR_RECOVERED',
-                    reason: 'Account auto-recovered after 5 minutes from temp_error status',
+                    reason: `Account auto-recovered after ${safeRecoveryMinutes} minutes from temp_error status`,
                     timestamp: new Date().toISOString()
                   })
                 } catch (webhookError) {
@@ -1524,8 +1540,8 @@ class ClaudeConsoleAccountService {
             logger.error(`❌ Failed to auto-recover temp_error account ${accountId}:`, error)
           }
         },
-        6 * 60 * 1000
-      ) // 6 分钟后执行，确保已过 5 分钟
+        recoveryDelayMs + safetyBufferMs
+      )
 
       // 发送Webhook通知
       try {
@@ -1535,8 +1551,8 @@ class ClaudeConsoleAccountService {
           accountName: accountData.name,
           platform: 'claude-console',
           status: 'temp_error',
-          errorCode: 'CONSECUTIVE_5XX_ERRORS',
-          reason: 'Account temporarily disabled due to consecutive 5xx errors',
+          errorCode,
+          reason,
           timestamp: new Date().toISOString()
         })
       } catch (webhookError) {
@@ -1549,6 +1565,7 @@ class ClaudeConsoleAccountService {
       throw error
     }
   }
+
 
   // 🔢 账户并发控制方法
 

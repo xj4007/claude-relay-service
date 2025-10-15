@@ -37,6 +37,7 @@
 |--------|---------|---------|---------|
 | **401** | 认证失败 | `markAccountUnauthorized()` | 手动重置或刷新凭据 |
 | **403** | 权限不足/账户被封 | `markAccountBlocked()` | 仅手动恢复 |
+| **403（并发超限）** | 供应商并发限制（Too many active sessions） | `markAccountTempError()` | 6分钟后自动恢复 |
 | **429** | 请求频率限制 | `markAccountRateLimited()` | 自动恢复（根据 rate-limit-reset 时间）|
 | **529** | 服务过载 | `markAccountOverloaded()` | 10分钟后自动恢复 |
 
@@ -50,6 +51,8 @@
 | **502** | 网关错误 | 3次 | 5分钟 | `markAccountTempError()` |
 | **503** | 服务不可用 | 3次 | 5分钟 | `markAccountTempError()` |
 | **504** | 网关超时 | 3次 | 5分钟 | `markAccountTempError()` |
+
+> 🆕 当上游供应商（例如 88code）返回 `Too many active sessions` 或类似并发限制提示时，会立即调用 `markAccountTempError()` 暂停该账号 6 分钟，并在恢复时自动清理粘性会话映射。
 
 ---
 

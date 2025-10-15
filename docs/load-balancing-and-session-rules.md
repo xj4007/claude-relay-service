@@ -23,7 +23,7 @@
 - **定义**: 同一个sessionHash在TTL期间内始终使用同一个供应商账户
 - **目的**: 保持对话上下文连续性，避免频繁切换账户
 - **续期策略**: 智能续期，剩余时间少于阈值时自动续期
-> ⚠️ 如果粘性的账户进入 `temp_error` 或 `rate_limited` 等非可用状态，调度器会删除映射并重新选取账户。Claude Console 账户在 5 分钟内出现 3 次 5xx/504 错误时会自动被标记为 `temp_error`。
+> ⚠️ 如果粘性的账户进入 `temp_error` 或 `rate_limited` 等非可用状态，调度器会删除映射并重新选取账户。Claude Console 账户在 5 分钟内出现 3 次 5xx/504 错误，或遇到 88code 并发限制（`Too many active sessions`），都会自动被标记为 `temp_error` 并至少暂停 6 分钟。
 
 ## sessionHash 生成规则
 

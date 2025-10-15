@@ -545,6 +545,15 @@ class ClaudeConsoleRelayService {
           body: JSON.stringify(sanitizedError),
           accountId
         }
+      } else if (response.status === 403) {
+        await this._handleVendorConcurrencyLimit(accountId, account, response.data)
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status >= 500 && response.status <= 504) {
         // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
         // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
@@ -927,7 +936,7 @@ class ClaudeConsoleRelayService {
       const request = axios(requestConfig)
 
       request
-        .then((response) => {
+        .then(async (response) => {
           // 错误响应处理
           if (response.status !== 200) {
             logger.error(`❌ [STREAM-ERR] Status: ${response.status} | Acc: ${account?.name}`)
@@ -942,6 +951,8 @@ class ClaudeConsoleRelayService {
               })
             } else if (response.status === 529) {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
+            } else if (response.status === 403) {
+              await this._handleVendorConcurrencyLimit(accountId, account, response.data)
             } else if (response.status >= 500 && response.status <= 504) {
               // 🔥 5xx错误处理：将在收集完errorData后统一处理（在 response.data.on('end') 中）
               // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
@@ -1430,6 +1441,114 @@ class ClaudeConsoleRelayService {
       }
     } catch (error) {
       logger.error(`Failed to record main model success for account ${accountId}:`, error)
+    }
+  }
+
+  _extractErrorDetails(responseData) {
+    if (responseData === null || responseData === undefined) {
+      return { payload: null, raw: '', message: '' }
+    }
+
+    let raw = ''
+    let payload = null
+
+    if (typeof responseData === 'string') {
+      raw = responseData
+    } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(responseData)) {
+      raw = responseData.toString('utf8')
+    } else if (typeof responseData === 'object') {
+      payload = responseData
+    }
+
+    const trimmed = raw && raw.trim ? raw.trim() : ''
+    if (!payload && trimmed) {
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          payload = JSON.parse(trimmed)
+        } catch (error) {
+          logger.debug('⚠️ Failed to parse error payload as JSON for vendor concurrency detection:', error.message)
+        }
+      }
+    }
+
+    if (payload && !raw) {
+      try {
+        raw = JSON.stringify(payload)
+      } catch (error) {
+        raw = ''
+      }
+    }
+
+    const message =
+      payload && payload.error && typeof payload.error.message === 'string'
+        ? payload.error.message
+        : payload && typeof payload.message === 'string'
+          ? payload.message
+          : raw
+
+    return { payload, raw, message }
+  }
+
+  async _handleVendorConcurrencyLimit(accountId, account, responseData) {
+    try {
+      const { payload, raw, message } = this._extractErrorDetails(responseData || {})
+      const lowerMessage = (message || '').toLowerCase()
+      const rawLower = (raw || '').toLowerCase()
+      const accountName = (account?.name || '').toLowerCase()
+      const is88CodeVendor = /88code/.test(accountName) || /88code/.test(lowerMessage) || /88code/.test(rawLower)
+      const hasConcurrencyHint =
+        lowerMessage.includes('too many active sessions') ||
+        lowerMessage.includes('active sessions detected') ||
+        lowerMessage.includes('close unused sessions')
+
+      if (!hasConcurrencyHint) {
+        logger.debug(
+          `⚠️ 403 received for account ${accountId} but no vendor concurrency signature detected (message: ${message?.slice ? message.slice(0, 120) : message})`
+        )
+        return
+      }
+
+      const waitMatch = lowerMessage.match(/wait\s+(\d+)\s+minute/)
+      const parsedWait = waitMatch ? parseInt(waitMatch[1], 10) : NaN
+      const suggestedWait = Number.isFinite(parsedWait) ? parsedWait : null
+      const recoveryMinutes = Math.max(suggestedWait || 0, 6)
+
+      const reason = is88CodeVendor
+        ? 'Account paused due to 88code concurrency limit (too many active sessions)'
+        : 'Account paused due to upstream concurrency limit (too many active sessions)'
+
+      let payloadSnippet = ''
+      if (payload) {
+        try {
+          payloadSnippet = JSON.stringify(payload).slice(0, 1000)
+        } catch (error) {
+          payloadSnippet = ''
+        }
+      }
+
+      const metadata = {
+        vendor: is88CodeVendor ? '88code' : accountName || 'unknown',
+        rawMessage: raw?.slice(0, 1000) || '',
+        suggestedWaitMinutes: suggestedWait,
+        detectedAt: new Date().toISOString(),
+        payloadSnippet
+      }
+
+      await claudeConsoleAccountService.markAccountTempError(accountId, {
+        reason,
+        autoRecoveryMinutes: recoveryMinutes,
+        metadata,
+        errorCode: 'VENDOR_CONCURRENCY_LIMIT'
+      })
+
+      logger.warn(
+        `🚫 Vendor concurrency limit detected for account ${accountId} (${account?.name || 'unknown'}) - paused for ${recoveryMinutes} minutes`
+      )
+    } catch (error) {
+      logger.error(
+        `❌ Failed to handle vendor concurrency limit for account ${accountId}:`,
+        error
+      )
     }
   }
 
