@@ -113,6 +113,22 @@ class RetryManager {
       return 'cloudflare timeout 524'
     }
 
+    // 🆕 检测 403 权限错误（会话过多、账户限制等）
+    if (statusCode === 403) {
+      const tooManySessions =
+        normalizedText.includes('too many active sessions') ||
+        normalizedText.includes('permission_error')
+
+      if (tooManySessions) {
+        return 'too many active sessions (403)'
+      }
+
+      // 其他 403 权限错误也应该切换账户
+      if (normalizedText.includes('permission') || normalizedText.includes('forbidden')) {
+        return 'permission denied (403)'
+      }
+    }
+
     return null
   }
 

@@ -1055,10 +1055,17 @@ class ClaudeConsoleRelayService {
 
                 // 解析SSE数据寻找usage信息
                 for (const line of lines) {
+                  // 🔧 兼容两种SSE格式：'data: ' 和 'data:'
+                  let dataLine = null
                   if (line.startsWith('data: ') && line.length > 6) {
+                    dataLine = line.slice(6) // 标准格式：'data: {...}'
+                  } else if (line.startsWith('data:') && line.length > 5) {
+                    dataLine = line.slice(5) // 非标准格式：'data:{...}'
+                  }
+
+                  if (dataLine) {
                     try {
-                      const jsonStr = line.slice(6)
-                      const data = JSON.parse(jsonStr)
+                      const data = JSON.parse(dataLine)
 
                       // 收集usage数据
                       if (data.type === 'message_start' && data.message && data.message.usage) {
@@ -1097,7 +1104,10 @@ class ClaudeConsoleRelayService {
 
                       // 不再因为模型不支持而block账号
                     } catch (e) {
-                      // 忽略解析错误
+                      // 🔍 记录解析错误
+                      logger.warn(
+                        `⚠️ [STREAM-DEBUG] Failed to parse SSE line: ${e.message} | Line: ${line.substring(0, 100)} | Acc: ${account?.name}`
+                      )
                     }
                   }
                 }
@@ -1356,27 +1366,22 @@ class ClaudeConsoleRelayService {
       const errorCount = await claudeConsoleAccountService.getServerErrorCount(accountId)
 
       // 🎯 优化后的阈值策略：区分不同错误类型
-      let threshold
-      let errorType
-      if (statusCode === 504) {
-        threshold = 15 // 504超时错误更宽容：15次触发
-        errorType = 'Timeout (504)'
-      } else if (statusCode === 503 || statusCode === 529) {
-        threshold = 8 // 503/529服务不可用：8次触发
-        errorType = 'Service Unavailable'
-      } else {
-        threshold = 5 // 500/502等严重错误：5次触发
-        errorType = 'Server Error'
-      }
+      const threshold = 3
+      const errorType =
+        statusCode === 504
+          ? 'Timeout (504)'
+          : statusCode === 503 || statusCode === 529
+            ? 'Service Unavailable'
+            : 'Server Error'
 
       logger.warn(
         `⏱️ ${errorType} for Claude Console account ${accountId}, error count: ${errorCount}/${threshold}`
       )
 
-      // 如果连续错误超过阈值，标记为 temp_error
-      if (errorCount > threshold) {
+      // 如果连续错误达到阈值，标记为 temp_error 以阻止继续调度
+      if (errorCount >= threshold) {
         logger.error(
-          `❌ Claude Console account ${accountId} exceeded ${errorType} threshold (${errorCount} errors), marking as temp_error`
+          `❌ Claude Console account ${accountId} reached ${errorType} threshold (${errorCount} errors), marking as temp_error`
         )
         await claudeConsoleAccountService.markAccountTempError(accountId)
       }

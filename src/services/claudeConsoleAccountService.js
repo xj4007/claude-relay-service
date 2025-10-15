@@ -1384,22 +1384,23 @@ class ClaudeConsoleAccountService {
 
       // 🔄 使用 sorted set 记录每次错误及时间戳，支持自动衰减
       const now = Date.now()
-      const thirtyMinutesAgo = now - 30 * 60 * 1000
+      const slidingWindowMs = 5 * 60 * 1000
+      const windowStart = now - slidingWindowMs
 
       // 添加当前错误记录
       await client.zadd(key, now, `${now}:${statusCode}`)
 
       // 清理30分钟前的旧错误（自动衰减）
-      await client.zremrangebyscore(key, '-inf', thirtyMinutesAgo)
+      await client.zremrangebyscore(key, '-inf', windowStart)
 
       // 设置1小时过期时间
-      await client.expire(key, 3600)
+      await client.expire(key, Math.ceil((slidingWindowMs * 2) / 1000))
 
       // 获取当前有效错误数
       const errorCount = await client.zcard(key)
 
       logger.info(
-        `📝 Recorded ${statusCode} error for Claude Console account ${accountId} (${errorCount} errors in last 30min)`
+        `📝 Recorded ${statusCode} error for Claude Console account ${accountId} (${errorCount} errors in last 5min)`
       )
     } catch (error) {
       logger.error(`❌ Failed to record ${statusCode} error for account ${accountId}:`, error)
@@ -1414,10 +1415,11 @@ class ClaudeConsoleAccountService {
 
       // 🔄 从 sorted set 获取30分钟内的错误数
       const now = Date.now()
-      const thirtyMinutesAgo = now - 30 * 60 * 1000
+      const slidingWindowMs = 5 * 60 * 1000
+      const windowStart = now - slidingWindowMs
 
       // 清理过期记录（可选，因为 recordServerError 已经清理）
-      await client.zremrangebyscore(key, '-inf', thirtyMinutesAgo)
+      await client.zremrangebyscore(key, '-inf', windowStart)
 
       // 获取当前有效错误数
       const count = await client.zcard(key)

@@ -173,6 +173,11 @@ function isStreamRetryableError(error) {
     return true
   }
 
+  // 🆕 检查是否是特殊错误响应（空响应体、JSON解析失败等）
+  if (error.shouldRetryDueToSpecialError) {
+    return true
+  }
+
   // 检查错误消息
   const errorMessage = error.message ? error.message.toLowerCase() : ''
   if (
@@ -184,14 +189,21 @@ function isStreamRetryableError(error) {
     errorMessage.includes('502') ||
     errorMessage.includes('504') ||
     errorMessage.includes('500') ||
-    errorMessage.includes('overloaded')
+    errorMessage.includes('overloaded') ||
+    errorMessage.includes('unexpected end of json input') || // JSON解析错误
+    errorMessage.includes('empty response body') ||
+    errorMessage.includes('malformed json') ||
+    errorMessage.includes('invalid claude api response') ||
+    errorMessage.includes('too many active sessions') || // 🆕 会话过多错误（应切换账户）
+    errorMessage.includes('permission_error') // 🆕 权限错误（可能是账户限制）
   ) {
     return true
   }
 
   // HTTP状态码检查
   if (error.statusCode) {
-    const retryableStatusCodes = [500, 502, 503, 504, 529]
+    // 🔧 403 也应该重试（会话过多、权限问题可能在其他账户上不存在）
+    const retryableStatusCodes = [403, 500, 502, 503, 504, 524, 529]
     return retryableStatusCodes.includes(error.statusCode)
   }
 

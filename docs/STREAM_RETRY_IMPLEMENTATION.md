@@ -80,6 +80,8 @@ const selection = await unifiedClaudeScheduler.selectAccountForApiKey(
 )
 ```
 
+> ℹ️ Claude Console 账户在 5 分钟内累计 3 次 5xx/504 错误时会被标记为 `temp_error`，调度器会在粘性会话阶段自动跳过这些账户，确保后续重试真正切换到新的账号。
+
 ### 3. 错误判断和重试决策
 ```javascript
 catch (error) {

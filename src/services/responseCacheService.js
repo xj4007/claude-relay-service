@@ -38,7 +38,7 @@ class ResponseCacheService {
         temperature: requestBody.temperature,
         top_p: requestBody.top_p,
         top_k: requestBody.top_k,
-        stop_sequences: requestBody.stop_sequences,
+        stop_sequences: requestBody.stop_sequences
         // 不包含 metadata 和 stream，因为这些不影响输出内容
       }
 
@@ -125,6 +125,16 @@ class ResponseCacheService {
       // 执行实际请求
       const response = await fetchFn()
 
+      // 🔍 检测特殊错误响应（空响应体、JSON解析失败等）
+      const shouldRetryDueToSpecialError = this._shouldRetryForSpecialError(response)
+      if (shouldRetryDueToSpecialError) {
+        logger.warn(
+          `🔄 Detected special error response: ${shouldRetryDueToSpecialError} | CacheKey: ${cacheKey.substring(0, 16)}...`
+        )
+        // 标记为失败，让等待的请求重新尝试而不是共享这个有问题的响应
+        return { success: false, response }
+      }
+
       // 缓存成功的响应（只缓存2xx响应）
       if (response.statusCode >= 200 && response.statusCode < 300) {
         await this.cacheResponse(cacheKey, response, ttl)
@@ -179,7 +189,7 @@ class ResponseCacheService {
         headers: JSON.stringify(response.headers),
         body: JSON.stringify(response.body),
         usage: response.usage ? JSON.stringify(response.usage) : '',
-        cachedAt: Date.now().toString(),
+        cachedAt: Date.now().toString()
       }
 
       await client.hset(redisKey, cacheData)
@@ -293,7 +303,7 @@ class ResponseCacheService {
           await client.hset(`${redisKey}:meta`, {
             complete: 'true',
             cachedAt: Date.now().toString(),
-            chunkCount: chunks.length.toString(),
+            chunkCount: chunks.length.toString()
           })
 
           // 设置过期时间
@@ -315,9 +325,9 @@ class ResponseCacheService {
         return {
           chunkCount: chunks.length,
           totalSize,
-          isComplete,
+          isComplete
         }
-      },
+      }
     }
   }
 
@@ -363,12 +373,106 @@ class ResponseCacheService {
         responseCacheSizeMB: (totalResponseSize / 1024 / 1024).toFixed(2),
         streamCacheCount,
         ttlSeconds: this.DEFAULT_TTL,
-        maxCacheSizeMB: this.MAX_CACHE_SIZE / 1024 / 1024,
+        maxCacheSizeMB: this.MAX_CACHE_SIZE / 1024 / 1024
       }
     } catch (error) {
       logger.error(`❌ Failed to get cache stats: ${error.message}`)
       return null
     }
+  }
+
+  /**
+   * 🔍 检测是否为需要重试的特殊错误响应
+   * @param {Object} response - 响应对象
+   * @returns {string|null} - 需要重试时返回原因描述，否则返回 null
+   */
+  _shouldRetryForSpecialError(response) {
+    if (!response || !response.statusCode) {
+      return 'missing response or status code'
+    }
+
+    const { statusCode } = response
+    let bodyText = ''
+
+    // 获取响应体文本
+    if (typeof response.body === 'string') {
+      bodyText = response.body
+    } else if (response.body !== undefined && response.body !== null) {
+      try {
+        bodyText = JSON.stringify(response.body)
+      } catch (error) {
+        return 'failed to stringify response body'
+      }
+    }
+
+    const normalizedText = bodyText.toLowerCase()
+
+    // 🆕 检测空响应体或无效 JSON（状态码 200 但响应体异常）
+    if (statusCode === 200 || statusCode === 201) {
+      // 检测完全空的响应体
+      if (!bodyText || bodyText.trim() === '') {
+        return 'empty response body with 200 status'
+      }
+
+      // 检测响应体过短（可能是截断的响应）
+      if (bodyText.length < 10 && !bodyText.includes('{')) {
+        return 'suspiciously short response body'
+      }
+
+      // 尝试解析 JSON，如果失败说明格式有问题
+      try {
+        const parsed = JSON.parse(bodyText)
+        // 检测缺少必要字段的响应（Claude API 应该包含这些字段）
+        if (parsed && typeof parsed === 'object') {
+          const hasValidStructure =
+            parsed.content ||
+            parsed.message ||
+            parsed.error ||
+            parsed.type ||
+            (Array.isArray(parsed.content) && parsed.content.length > 0)
+
+          if (!hasValidStructure) {
+            return 'invalid claude api response structure'
+          }
+        }
+      } catch (jsonError) {
+        return 'malformed json response with 200 status'
+      }
+    }
+
+    // 检测其他特殊错误
+    if (statusCode === 400) {
+      const thinkingMismatch =
+        normalizedText.includes('expected `thinking`') &&
+        normalizedText.includes('found `tool_use`')
+
+      if (thinkingMismatch) {
+        return 'thinking/tool_use format mismatch'
+      }
+
+      const officialInternalError =
+        normalizedText.includes('"type":"internal_error"') ||
+        normalizedText.includes("'type':'internal_error'") ||
+        normalizedText.includes('server internal error, please contact admin')
+
+      if (officialInternalError) {
+        return 'official internal error 400'
+      }
+
+      // 🆕 检测 thinking.budget_tokens 相关错误
+      const thinkingBudgetError =
+        normalizedText.includes('max_tokens') && normalizedText.includes('thinking.budget_tokens')
+
+      if (thinkingBudgetError) {
+        return 'thinking budget tokens validation error'
+      }
+    }
+
+    if (statusCode === 524) {
+      return 'cloudflare timeout 524'
+    }
+
+    return null
   }
 }
 
