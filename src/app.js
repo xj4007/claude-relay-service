@@ -14,6 +14,7 @@ const cacheMonitor = require('./utils/cacheMonitor')
 
 // Import routes
 const apiRoutes = require('./routes/api')
+const unifiedRoutes = require('./routes/unified')
 const adminRoutes = require('./routes/admin')
 const webRoutes = require('./routes/web')
 const apiStatsRoutes = require('./routes/apiStats')
@@ -54,6 +55,11 @@ class Application {
       // 💰 初始化价格服务
       logger.info('🔄 Initializing pricing service...')
       await pricingService.initialize()
+
+      // 📋 初始化模型服务
+      logger.info('🔄 Initializing model service...')
+      const modelService = require('./services/modelService')
+      await modelService.initialize()
 
       // 📊 初始化缓存监控
       await this.initializeCacheMonitoring()
@@ -251,6 +257,7 @@ class Application {
 
       // 🛣️ 路由
       this.app.use('/api', apiRoutes)
+      this.app.use('/api', unifiedRoutes) // 统一智能路由（支持 /v1/chat/completions 等）
       this.app.use('/claude', apiRoutes) // /claude 路由别名，与 /api 功能相同
       this.app.use('/admin', adminRoutes)
       this.app.use('/users', userRoutes)
@@ -262,7 +269,8 @@ class Application {
       this.app.use('/gemini', geminiRoutes) // 保留原有路径以保持向后兼容
       this.app.use('/openai/gemini', openaiGeminiRoutes)
       this.app.use('/openai/claude', openaiClaudeRoutes)
-      this.app.use('/openai', openaiRoutes)
+      this.app.use('/openai', unifiedRoutes) // 复用统一智能路由，支持 /openai/v1/chat/completions
+      this.app.use('/openai', openaiRoutes) // Codex API 路由（/openai/responses, /openai/v1/responses）
       // Droid 路由：支持多种 Factory.ai 端点
       this.app.use('/droid', droidRoutes) // Droid (Factory.ai) API 转发
       this.app.use('/azure', azureOpenaiRoutes)
@@ -556,6 +564,62 @@ class Application {
     logger.info(
       `🚨 Rate limit cleanup service started (checking every ${cleanupIntervalMinutes} minutes)`
     )
+
+    // 🔢 启动并发计数自动清理任务（Phase 1 修复：解决并发泄漏问题）
+    // 每分钟主动清理所有过期的并发项，不依赖请求触发
+    setInterval(async () => {
+      try {
+        const keys = await redis.keys('concurrency:*')
+        if (keys.length === 0) {
+          return
+        }
+
+        const now = Date.now()
+        let totalCleaned = 0
+
+        // 使用 Lua 脚本批量清理所有过期项
+        for (const key of keys) {
+          try {
+            const cleaned = await redis.client.eval(
+              `
+              local key = KEYS[1]
+              local now = tonumber(ARGV[1])
+
+              -- 清理过期项
+              redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+
+              -- 获取剩余计数
+              local count = redis.call('ZCARD', key)
+
+              -- 如果计数为0，删除键
+              if count <= 0 then
+                redis.call('DEL', key)
+                return 1
+              end
+
+              return 0
+            `,
+              1,
+              key,
+              now
+            )
+            if (cleaned === 1) {
+              totalCleaned++
+            }
+          } catch (error) {
+            logger.error(`❌ Failed to clean concurrency key ${key}:`, error)
+          }
+        }
+
+        if (totalCleaned > 0) {
+          logger.info(`🔢 Concurrency cleanup: cleaned ${totalCleaned} expired keys`)
+        }
+      } catch (error) {
+        logger.error('❌ Concurrency cleanup task failed:', error)
+      }
+    }, 60000) // 每分钟执行一次
+
+    logger.info('🔢 Concurrency cleanup task started (running every 1 minute)')
   }
 
   setupGracefulShutdown() {
@@ -574,6 +638,15 @@ class Application {
             logger.error('❌ Error cleaning up pricing service:', error)
           }
 
+          // 清理 model service 的文件监听器
+          try {
+            const modelService = require('./services/modelService')
+            modelService.cleanup()
+            logger.info('📋 Model service cleaned up')
+          } catch (error) {
+            logger.error('❌ Error cleaning up model service:', error)
+          }
+
           // 停止限流清理服务
           try {
             const rateLimitCleanupService = require('./services/rateLimitCleanupService')
@@ -581,6 +654,21 @@ class Application {
             logger.info('🚨 Rate limit cleanup service stopped')
           } catch (error) {
             logger.error('❌ Error stopping rate limit cleanup service:', error)
+          }
+
+          // 🔢 清理所有并发计数（Phase 1 修复：防止重启泄漏）
+          try {
+            logger.info('🔢 Cleaning up all concurrency counters...')
+            const keys = await redis.keys('concurrency:*')
+            if (keys.length > 0) {
+              await redis.client.del(...keys)
+              logger.info(`✅ Cleaned ${keys.length} concurrency keys`)
+            } else {
+              logger.info('✅ No concurrency keys to clean')
+            }
+          } catch (error) {
+            logger.error('❌ Error cleaning up concurrency counters:', error)
+            // 不阻止退出流程
           }
 
           try {

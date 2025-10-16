@@ -56,6 +56,11 @@ class BedrockAccountService {
       priority,
       schedulable,
       credentialType,
+
+      // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
+      // 注意：Bedrock 使用 AWS 凭证，没有 OAuth token，因此没有 expiresAt
+      subscriptionExpiresAt: options.subscriptionExpiresAt || null,
+
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       type: 'bedrock' // 标识这是Bedrock账户
@@ -142,9 +147,14 @@ class BedrockAccountService {
             priority: account.priority,
             schedulable: account.schedulable,
             credentialType: account.credentialType,
+
+            // ✅ 前端显示订阅过期时间（业务字段）
+            expiresAt: account.subscriptionExpiresAt || null,
+
             createdAt: account.createdAt,
             updatedAt: account.updatedAt,
             type: 'bedrock',
+            platform: 'bedrock',
             hasCredentials: !!account.awsCredentials
           })
         }
@@ -225,6 +235,12 @@ class BedrockAccountService {
         logger.info(`🔐 重新加密Bedrock账户凭证 - ID: ${accountId}`)
       }
 
+      // ✅ 直接保存 subscriptionExpiresAt（如果提供）
+      // Bedrock 没有 token 刷新逻辑，不会覆盖此字段
+      if (updates.subscriptionExpiresAt !== undefined) {
+        account.subscriptionExpiresAt = updates.subscriptionExpiresAt
+      }
+
       account.updatedAt = new Date().toISOString()
 
       await client.set(`bedrock_account:${accountId}`, JSON.stringify(account))
@@ -282,9 +298,17 @@ class BedrockAccountService {
         return { success: false, error: 'Failed to get accounts' }
       }
 
-      const availableAccounts = accountsResult.data.filter(
-        (account) => account.isActive && account.schedulable
-      )
+      const availableAccounts = accountsResult.data.filter((account) => {
+        // ✅ 检查账户订阅是否过期
+        if (this.isSubscriptionExpired(account)) {
+          logger.debug(
+            `⏰ Skipping expired Bedrock account: ${account.name}, expired at ${account.subscriptionExpiresAt || account.expiresAt}`
+          )
+          return false
+        }
+
+        return account.isActive && account.schedulable
+      })
 
       if (availableAccounts.length === 0) {
         return { success: false, error: 'No available Bedrock accounts' }
@@ -350,6 +374,19 @@ class BedrockAccountService {
         error: error.message
       }
     }
+  }
+
+  /**
+   * 检查账户订阅是否过期
+   * @param {Object} account - 账户对象
+   * @returns {boolean} - true: 已过期, false: 未过期
+   */
+  isSubscriptionExpired(account) {
+    if (!account.subscriptionExpiresAt) {
+      return false // 未设置视为永不过期
+    }
+    const expiryDate = new Date(account.subscriptionExpiresAt)
+    return expiryDate <= new Date()
   }
 
   // 🔑 生成加密密钥（缓存优化）

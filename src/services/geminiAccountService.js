@@ -384,9 +384,12 @@ async function createAccount(accountData) {
     geminiOauth: geminiOauth ? encrypt(geminiOauth) : '',
     accessToken: accessToken ? encrypt(accessToken) : '',
     refreshToken: refreshToken ? encrypt(refreshToken) : '',
-    expiresAt,
+    expiresAt, // OAuth Token 过期时间（技术字段，自动刷新）
     // 只有OAuth方式才有scopes，手动添加的没有
     scopes: accountData.geminiOauth ? accountData.scopes || OAUTH_SCOPES.join(' ') : '',
+
+    // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
+    subscriptionExpiresAt: accountData.subscriptionExpiresAt || null,
 
     // 代理设置
     proxy: accountData.proxy ? JSON.stringify(accountData.proxy) : '',
@@ -521,13 +524,21 @@ async function updateAccount(accountId, updates) {
     }
   }
 
-  // 如果新增了 refresh token，更新过期时间为10分钟
+  // ✅ 关键：如果新增了 refresh token，只更新 token 过期时间
+  // 不要覆盖 subscriptionExpiresAt
   if (needUpdateExpiry) {
     const newExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString()
-    updates.expiresAt = newExpiry
+    updates.expiresAt = newExpiry // 只更新 OAuth Token 过期时间
+    // ⚠️ 重要：不要修改 subscriptionExpiresAt
     logger.info(
-      `🔄 New refresh token added for Gemini account ${accountId}, setting expiry to 10 minutes`
+      `🔄 New refresh token added for Gemini account ${accountId}, setting token expiry to 10 minutes`
     )
+  }
+
+  // ✅ 如果通过路由映射更新了 subscriptionExpiresAt，直接保存
+  // subscriptionExpiresAt 是业务字段，与 token 刷新独立
+  if (updates.subscriptionExpiresAt !== undefined) {
+    // 直接保存，不做任何调整
   }
 
   // 如果通过 geminiOauth 更新，也要检查是否新增了 refresh token
@@ -643,12 +654,25 @@ async function getAllAccounts() {
       // 转换 schedulable 字符串为布尔值（与 getAccount 保持一致）
       accountData.schedulable = accountData.schedulable !== 'false' // 默认为true，只有明确设置为'false'才为false
 
+      const tokenExpiresAt = accountData.expiresAt || null
+      const subscriptionExpiresAt =
+        accountData.subscriptionExpiresAt && accountData.subscriptionExpiresAt !== ''
+          ? accountData.subscriptionExpiresAt
+          : null
+
       // 不解密敏感字段，只返回基本信息
       accounts.push({
         ...accountData,
         geminiOauth: accountData.geminiOauth ? '[ENCRYPTED]' : '',
         accessToken: accountData.accessToken ? '[ENCRYPTED]' : '',
         refreshToken: accountData.refreshToken ? '[ENCRYPTED]' : '',
+
+        // ✅ 前端显示订阅过期时间（业务字段）
+        // 注意：前端看到的 expiresAt 实际上是 subscriptionExpiresAt
+        tokenExpiresAt,
+        subscriptionExpiresAt,
+        expiresAt: subscriptionExpiresAt,
+
         // 添加 scopes 字段用于判断认证方式
         // 处理空字符串和默认值的情况
         scopes:
@@ -727,8 +751,17 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
 
   for (const accountId of sharedAccountIds) {
     const account = await getAccount(accountId)
-    if (account && account.isActive === 'true' && !isRateLimited(account)) {
+    if (
+      account &&
+      account.isActive === 'true' &&
+      !isRateLimited(account) &&
+      !isSubscriptionExpired(account)
+    ) {
       availableAccounts.push(account)
+    } else if (account && isSubscriptionExpired(account)) {
+      logger.debug(
+        `⏰ Skipping expired Gemini account: ${account.name}, expired at ${account.subscriptionExpiresAt}`
+      )
     }
   }
 
@@ -781,6 +814,19 @@ function isTokenExpired(account) {
   const buffer = 10 * 1000 // 10秒缓冲
 
   return now >= expiryTime - buffer
+}
+
+/**
+ * 检查账户订阅是否过期
+ * @param {Object} account - 账户对象
+ * @returns {boolean} - true: 已过期, false: 未过期
+ */
+function isSubscriptionExpired(account) {
+  if (!account.subscriptionExpiresAt) {
+    return false // 未设置视为永不过期
+  }
+  const expiryDate = new Date(account.subscriptionExpiresAt)
+  return expiryDate <= new Date()
 }
 
 // 检查账户是否被限流

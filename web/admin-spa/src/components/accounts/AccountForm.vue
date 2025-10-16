@@ -641,6 +641,49 @@
               </p>
             </div>
 
+            <!-- 到期时间 - 仅在创建账户时显示，编辑时使用独立的过期时间编辑弹窗 -->
+            <div v-if="!isEdit">
+              <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300"
+                >到期时间 (可选)</label
+              >
+              <div
+                class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800"
+              >
+                <select
+                  v-model="form.expireDuration"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  @change="updateAccountExpireAt"
+                >
+                  <option value="">永不过期</option>
+                  <option value="30d">30 天</option>
+                  <option value="90d">90 天</option>
+                  <option value="180d">180 天</option>
+                  <option value="365d">365 天</option>
+                  <option value="custom">自定义日期</option>
+                </select>
+                <div v-if="form.expireDuration === 'custom'" class="mt-3">
+                  <input
+                    v-model="form.customExpireDate"
+                    class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                    :min="minDateTime"
+                    type="datetime-local"
+                    @change="updateAccountCustomExpireAt"
+                  />
+                </div>
+                <p v-if="form.expiresAt" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  <i class="fas fa-calendar-alt mr-1" />
+                  将于 {{ formatExpireDate(form.expiresAt) }} 过期
+                </p>
+                <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  <i class="fas fa-infinity mr-1" />
+                  账户永不过期
+                </p>
+              </div>
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                设置 Claude Max/Pro 订阅的到期时间，到期后将停止调度此账户
+              </p>
+            </div>
+
             <!-- 分组选择器 -->
             <div v-if="form.accountType === 'group'">
               <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
@@ -1234,6 +1277,15 @@
                       + Sonnet 4
                     </button>
                     <button
+                      class="rounded-lg bg-indigo-100 px-3 py-1 text-xs text-indigo-700 transition-colors hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                      type="button"
+                      @click="
+                        addPresetMapping('claude-sonnet-4-5-20250929', 'claude-sonnet-4-5-20250929')
+                      "
+                    >
+                      + Sonnet 4.5
+                    </button>
+                    <button
                       class="rounded-lg bg-purple-100 px-3 py-1 text-xs text-purple-700 transition-colors hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50"
                       type="button"
                       @click="
@@ -1252,7 +1304,44 @@
                       + Haiku 3.5
                     </button>
                     <button
+                      class="rounded-lg bg-emerald-100 px-3 py-1 text-xs text-emerald-700 transition-colors hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+                      type="button"
+                      @click="
+                        addPresetMapping('claude-haiku-4-5-20251001', 'claude-haiku-4-5-20251001')
+                      "
+                    >
+                      + Haiku 4.5
+                    </button>
+                    <button
+                      class="rounded-lg bg-cyan-100 px-3 py-1 text-xs text-cyan-700 transition-colors hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400 dark:hover:bg-cyan-900/50"
+                      type="button"
+                      @click="addPresetMapping('deepseek-chat', 'deepseek-chat')"
+                    >
+                      + DeepSeek
+                    </button>
+                    <button
                       class="rounded-lg bg-orange-100 px-3 py-1 text-xs text-orange-700 transition-colors hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:hover:bg-orange-900/50"
+                      type="button"
+                      @click="addPresetMapping('Qwen', 'Qwen')"
+                    >
+                      + Qwen
+                    </button>
+                    <button
+                      class="rounded-lg bg-pink-100 px-3 py-1 text-xs text-pink-700 transition-colors hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400 dark:hover:bg-pink-900/50"
+                      type="button"
+                      @click="addPresetMapping('Kimi', 'Kimi')"
+                    >
+                      + Kimi
+                    </button>
+                    <button
+                      class="rounded-lg bg-teal-100 px-3 py-1 text-xs text-teal-700 transition-colors hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400 dark:hover:bg-teal-900/50"
+                      type="button"
+                      @click="addPresetMapping('GLM', 'GLM')"
+                    >
+                      + GLM
+                    </button>
+                    <button
+                      class="rounded-lg bg-amber-100 px-3 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50"
                       type="button"
                       @click="
                         addPresetMapping('claude-opus-4-1-20250805', 'claude-sonnet-4-20250514')
@@ -1791,7 +1880,8 @@
                   <li>新会话将随机命中一个 Key，并在会话有效期内保持粘性。</li>
                   <li>若某 Key 失效，会自动切换到剩余可用 Key，最大化成功率。</li>
                   <li>
-                    若上游返回 4xx 错误码，该 Key 会被自动移除；全部 Key 清空后账号将暂停调度。
+                    若上游返回 4xx 错误码，该 Key 会被自动标记为异常；全部 Key
+                    异常后账号将暂停调度。
                   </li>
                 </ul>
               </div>
@@ -2083,6 +2173,49 @@
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               共享账户：供所有API Key使用；专属账户：仅供特定API
               Key使用；分组调度：加入分组供分组内调度
+            </p>
+          </div>
+
+          <!-- 到期时间 - 仅在创建账户时显示，编辑时使用独立的过期时间编辑弹窗 -->
+          <div v-if="!isEdit">
+            <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300"
+              >到期时间 (可选)</label
+            >
+            <div
+              class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800"
+            >
+              <select
+                v-model="form.expireDuration"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                @change="updateAccountExpireAt"
+              >
+                <option value="">永不过期</option>
+                <option value="30d">30 天</option>
+                <option value="90d">90 天</option>
+                <option value="180d">180 天</option>
+                <option value="365d">365 天</option>
+                <option value="custom">自定义日期</option>
+              </select>
+              <div v-if="form.expireDuration === 'custom'" class="mt-3">
+                <input
+                  v-model="form.customExpireDate"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  :min="minDateTime"
+                  type="datetime-local"
+                  @change="updateAccountCustomExpireAt"
+                />
+              </div>
+              <p v-if="form.expiresAt" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                <i class="fas fa-calendar-alt mr-1" />
+                将于 {{ formatExpireDate(form.expiresAt) }} 过期
+              </p>
+              <p v-else class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                <i class="fas fa-infinity mr-1" />
+                账户永不过期
+              </p>
+            </div>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              设置 Claude Max/Pro 订阅的到期时间，到期后将停止调度此账户
             </p>
           </div>
 
@@ -2576,6 +2709,15 @@
                     + Sonnet 4
                   </button>
                   <button
+                    class="rounded-lg bg-indigo-100 px-3 py-1 text-xs text-indigo-700 transition-colors hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                    type="button"
+                    @click="
+                      addPresetMapping('claude-sonnet-4-5-20250929', 'claude-sonnet-4-5-20250929')
+                    "
+                  >
+                    + Sonnet 4.5
+                  </button>
+                  <button
                     class="rounded-lg bg-purple-100 px-3 py-1 text-xs text-purple-700 transition-colors hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50"
                     type="button"
                     @click="
@@ -2594,7 +2736,44 @@
                     + Haiku 3.5
                   </button>
                   <button
+                    class="rounded-lg bg-emerald-100 px-3 py-1 text-xs text-emerald-700 transition-colors hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+                    type="button"
+                    @click="
+                      addPresetMapping('claude-haiku-4-5-20251001', 'claude-haiku-4-5-20251001')
+                    "
+                  >
+                    + Haiku 4.5
+                  </button>
+                  <button
+                    class="rounded-lg bg-cyan-100 px-3 py-1 text-xs text-cyan-700 transition-colors hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400 dark:hover:bg-cyan-900/50"
+                    type="button"
+                    @click="addPresetMapping('deepseek-chat', 'deepseek-chat')"
+                  >
+                    + DeepSeek
+                  </button>
+                  <button
                     class="rounded-lg bg-orange-100 px-3 py-1 text-xs text-orange-700 transition-colors hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:hover:bg-orange-900/50"
+                    type="button"
+                    @click="addPresetMapping('Qwen', 'Qwen')"
+                  >
+                    + Qwen
+                  </button>
+                  <button
+                    class="rounded-lg bg-pink-100 px-3 py-1 text-xs text-pink-700 transition-colors hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400 dark:hover:bg-pink-900/50"
+                    type="button"
+                    @click="addPresetMapping('Kimi', 'Kimi')"
+                  >
+                    + Kimi
+                  </button>
+                  <button
+                    class="rounded-lg bg-teal-100 px-3 py-1 text-xs text-teal-700 transition-colors hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400 dark:hover:bg-teal-900/50"
+                    type="button"
+                    @click="addPresetMapping('GLM', 'GLM')"
+                  >
+                    + GLM
+                  </button>
+                  <button
+                    class="rounded-lg bg-amber-100 px-3 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50"
                     type="button"
                     @click="
                       addPresetMapping('claude-opus-4-1-20250805', 'claude-sonnet-4-20250514')
@@ -2959,10 +3138,18 @@
               >
                 <i class="fas fa-retweet text-sm text-white" />
               </div>
-              <div>
-                <h5 class="mb-2 font-semibold text-purple-900 dark:text-purple-200">
-                  更新 API Key
-                </h5>
+              <div class="flex-1">
+                <div class="mb-2 flex items-center justify-between">
+                  <h5 class="font-semibold text-purple-900 dark:text-purple-200">更新 API Key</h5>
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
+                    type="button"
+                    @click="showApiKeyManagement = true"
+                  >
+                    <i class="fas fa-list-ul" />
+                    <span>管理 API Key</span>
+                  </button>
+                </div>
                 <p class="mb-1 text-sm text-purple-800 dark:text-purple-200">
                   当前已保存 <strong>{{ existingApiKeyCount }}</strong> 条 API Key。您可以追加新的
                   Key，或通过下方模式快速覆盖、删除指定 Key。
@@ -3135,6 +3322,15 @@
       @close="showGroupManagement = false"
       @refresh="handleGroupRefresh"
     />
+
+    <!-- API Key 管理模态框 -->
+    <ApiKeyManagementModal
+      v-if="showApiKeyManagement"
+      :account-id="props.account?.id"
+      :account-name="props.account?.name"
+      @close="showApiKeyManagement = false"
+      @refresh="handleApiKeyRefresh"
+    />
   </Teleport>
 </template>
 
@@ -3148,6 +3344,7 @@ import ProxyConfig from './ProxyConfig.vue'
 import OAuthFlow from './OAuthFlow.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
 import GroupManagementModal from './GroupManagementModal.vue'
+import ApiKeyManagementModal from './ApiKeyManagementModal.vue'
 
 const props = defineProps({
   account: {
@@ -3186,6 +3383,9 @@ const clearingCache = ref(false)
 
 // 平台分组状态
 const platformGroup = ref('')
+
+// API Key 管理模态框
+const showApiKeyManagement = ref(false)
 
 // 根据现有平台确定分组
 const determinePlatformGroup = (platform) => {
@@ -3388,7 +3588,24 @@ const form = ref({
   // Azure OpenAI 特定字段
   azureEndpoint: props.account?.azureEndpoint || '',
   apiVersion: props.account?.apiVersion || '',
-  deploymentName: props.account?.deploymentName || ''
+  deploymentName: props.account?.deploymentName || '',
+  // 到期时间字段
+  expireDuration: (() => {
+    // 编辑时根据expiresAt初始化expireDuration
+    if (props.account?.expiresAt) {
+      return 'custom' // 如果有过期时间，默认显示为自定义
+    }
+    return ''
+  })(),
+  customExpireDate: (() => {
+    // 编辑时根据expiresAt初始化customExpireDate
+    if (props.account?.expiresAt) {
+      // 转换ISO时间为datetime-local格式 (YYYY-MM-DDTHH:mm)
+      return new Date(props.account.expiresAt).toISOString().slice(0, 16)
+    }
+    return ''
+  })(),
+  expiresAt: props.account?.expiresAt || null
 })
 
 // 模型限制配置
@@ -3405,8 +3622,13 @@ const commonModels = [
   { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', color: 'blue' },
   { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', color: 'indigo' },
   { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', color: 'green' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', color: 'emerald' },
   { value: 'claude-opus-4-20250514', label: 'Claude Opus 4', color: 'purple' },
-  { value: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1', color: 'purple' }
+  { value: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1', color: 'purple' },
+  { value: 'deepseek-chat', label: 'DeepSeek Chat', color: 'cyan' },
+  { value: 'Qwen', label: 'Qwen', color: 'orange' },
+  { value: 'Kimi', label: 'Kimi', color: 'pink' },
+  { value: 'GLM', label: 'GLM', color: 'teal' }
 ]
 
 // 模型映射表数据
@@ -3421,25 +3643,31 @@ const initModelMappings = () => {
       !Array.isArray(props.account.supportedModels)
     ) {
       const entries = Object.entries(props.account.supportedModels)
-      modelMappings.value = entries.map(([from, to]) => ({ from, to }))
 
       // 判断是白名单模式还是映射模式
       // 如果所有映射都是"映射到自己"，则视为白名单模式
       const isWhitelist = entries.every(([from, to]) => from === to)
       if (isWhitelist) {
         modelRestrictionMode.value = 'whitelist'
+        // 白名单模式：设置 allowedModels（显示勾选的模型）
         allowedModels.value = entries.map(([from]) => from)
+        // 同时保留 modelMappings（以便用户切换到映射模式时有初始数据）
+        modelMappings.value = entries.map(([from, to]) => ({ from, to }))
       } else {
         modelRestrictionMode.value = 'mapping'
+        // 映射模式：设置 modelMappings（显示映射表）
+        modelMappings.value = entries.map(([from, to]) => ({ from, to }))
+        // 不填充 allowedModels，因为映射模式不使用白名单复选框
       }
     } else if (Array.isArray(props.account.supportedModels)) {
       // 如果是数组格式（旧格式），转换为白名单模式
+      modelRestrictionMode.value = 'whitelist'
+      allowedModels.value = props.account.supportedModels
+      // 同时设置 modelMappings 为自映射
       modelMappings.value = props.account.supportedModels.map((model) => ({
         from: model,
         to: model
       }))
-      modelRestrictionMode.value = 'whitelist'
-      allowedModels.value = props.account.supportedModels
     }
   }
 }
@@ -3807,6 +4035,7 @@ const handleOAuthSuccess = async (tokenInfo) => {
       accountType: form.value.accountType,
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
+      expiresAt: form.value.expiresAt || undefined,
       proxy: proxyPayload
     }
 
@@ -4098,6 +4327,7 @@ const createAccount = async () => {
       accountType: form.value.accountType,
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
+      expiresAt: form.value.expiresAt || undefined,
       proxy: proxyPayload
     }
 
@@ -4359,6 +4589,7 @@ const updateAccount = async () => {
       accountType: form.value.accountType,
       groupId: form.value.accountType === 'group' ? form.value.groupId : undefined,
       groupIds: form.value.accountType === 'group' ? form.value.groupIds : undefined,
+      expiresAt: form.value.expiresAt || undefined,
       proxy: proxyPayload
     }
 
@@ -4741,6 +4972,30 @@ const handleNewGroup = () => {
 // 处理分组管理模态框刷新
 const handleGroupRefresh = async () => {
   await loadGroups()
+}
+
+// 处理 API Key 管理模态框刷新
+const handleApiKeyRefresh = async () => {
+  // 刷新账户信息以更新 API Key 数量
+  if (!props.account?.id) {
+    return
+  }
+
+  const refreshers = [
+    typeof accountsStore.fetchDroidAccounts === 'function'
+      ? accountsStore.fetchDroidAccounts
+      : null,
+    typeof accountsStore.fetchAllAccounts === 'function' ? accountsStore.fetchAllAccounts : null
+  ].filter(Boolean)
+
+  for (const refresher of refreshers) {
+    try {
+      await refresher()
+      return
+    } catch (error) {
+      console.error('刷新账户列表失败:', error)
+    }
+  }
 }
 
 // 监听平台变化，重置表单
@@ -5202,6 +5457,61 @@ const handleUnifiedClientIdChange = () => {
       form.value.unifiedClientId = generateClientId()
     }
   }
+}
+
+// 到期时间相关方法
+// 计算最小日期时间
+const minDateTime = computed(() => {
+  const now = new Date()
+  now.setMinutes(now.getMinutes() + 1)
+  return now.toISOString().slice(0, 16)
+})
+
+// 更新账户过期时间
+const updateAccountExpireAt = () => {
+  if (!form.value.expireDuration) {
+    form.value.expiresAt = null
+    return
+  }
+
+  if (form.value.expireDuration === 'custom') {
+    return
+  }
+
+  const now = new Date()
+  const duration = form.value.expireDuration
+  const match = duration.match(/(\d+)([d])/)
+
+  if (match) {
+    const [, value, unit] = match
+    const num = parseInt(value)
+
+    if (unit === 'd') {
+      now.setDate(now.getDate() + num)
+    }
+
+    form.value.expiresAt = now.toISOString()
+  }
+}
+
+// 更新自定义过期时间
+const updateAccountCustomExpireAt = () => {
+  if (form.value.customExpireDate) {
+    form.value.expiresAt = new Date(form.value.customExpireDate).toISOString()
+  }
+}
+
+// 格式化过期日期
+const formatExpireDate = (dateString) => {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 // 组件挂载时获取统一 User-Agent 信息

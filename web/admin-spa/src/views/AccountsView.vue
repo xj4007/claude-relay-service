@@ -207,6 +207,21 @@
                 <i v-else class="fas fa-sort ml-1 text-gray-400" />
               </th>
               <th
+                class="w-[12%] min-w-[110px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
+                @click="sortAccounts('expiresAt')"
+              >
+                到期时间
+                <i
+                  v-if="accountsSortBy === 'expiresAt'"
+                  :class="[
+                    'fas',
+                    accountsSortOrder === 'asc' ? 'fa-sort-up' : 'fa-sort-down',
+                    'ml-1'
+                  ]"
+                />
+                <i v-else class="fas fa-sort ml-1 text-gray-400" />
+              </th>
+              <th
                 class="w-[12%] min-w-[100px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                 @click="sortAccounts('status')"
               >
@@ -564,6 +579,49 @@
                     <i class="fas fa-question text-xs text-gray-700" />
                     <span class="text-xs font-semibold text-gray-800">未知</span>
                   </div>
+                </div>
+              </td>
+              <td class="whitespace-nowrap px-3 py-4">
+                <div class="flex flex-col gap-1">
+                  <!-- 已设置过期时间 -->
+                  <span v-if="account.expiresAt">
+                    <span
+                      v-if="isExpired(account.expiresAt)"
+                      class="inline-flex cursor-pointer items-center text-red-600 hover:underline"
+                      style="font-size: 13px"
+                      @click.stop="startEditAccountExpiry(account)"
+                    >
+                      <i class="fas fa-exclamation-circle mr-1 text-xs" />
+                      已过期
+                    </span>
+                    <span
+                      v-else-if="isExpiringSoon(account.expiresAt)"
+                      class="inline-flex cursor-pointer items-center text-orange-600 hover:underline"
+                      style="font-size: 13px"
+                      @click.stop="startEditAccountExpiry(account)"
+                    >
+                      <i class="fas fa-clock mr-1 text-xs" />
+                      {{ formatExpireDate(account.expiresAt) }}
+                    </span>
+                    <span
+                      v-else
+                      class="cursor-pointer text-gray-600 hover:underline dark:text-gray-400"
+                      style="font-size: 13px"
+                      @click.stop="startEditAccountExpiry(account)"
+                    >
+                      {{ formatExpireDate(account.expiresAt) }}
+                    </span>
+                  </span>
+                  <!-- 永不过期 -->
+                  <span
+                    v-else
+                    class="inline-flex cursor-pointer items-center text-gray-400 hover:underline dark:text-gray-500"
+                    style="font-size: 13px"
+                    @click.stop="startEditAccountExpiry(account)"
+                  >
+                    <i class="fas fa-infinity mr-1 text-xs" />
+                    永不过期
+                  </span>
                 </div>
               </td>
               <td class="whitespace-nowrap px-3 py-4">
@@ -1653,6 +1711,15 @@
       :summary="accountUsageSummary"
       @close="closeAccountUsageModal"
     />
+
+    <!-- 账户过期时间编辑弹窗 -->
+    <AccountExpiryEditModal
+      ref="expiryEditModalRef"
+      :account="editingExpiryAccount || { id: null, expiresAt: null, name: '' }"
+      :show="!!editingExpiryAccount"
+      @close="closeAccountExpiryEdit"
+      @save="handleSaveAccountExpiry"
+    />
   </div>
 </template>
 
@@ -1664,6 +1731,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import AccountForm from '@/components/accounts/AccountForm.vue'
 import CcrAccountForm from '@/components/accounts/CcrAccountForm.vue'
 import AccountUsageDetailModal from '@/components/accounts/AccountUsageDetailModal.vue'
+import AccountExpiryEditModal from '@/components/accounts/AccountExpiryEditModal.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
 import CustomDropdown from '@/components/common/CustomDropdown.vue'
 
@@ -1719,6 +1787,10 @@ const supportedUsagePlatforms = [
   'gemini',
   'droid'
 ]
+
+// 过期时间编辑弹窗状态
+const editingExpiryAccount = ref(null)
+const expiryEditModalRef = ref(null)
 
 // 缓存状态标志
 const apiKeysLoaded = ref(false)
@@ -3036,6 +3108,25 @@ const getDroidApiKeyCount = (account) => {
     return 0
   }
 
+  // 优先使用 apiKeys 数组来计算正常状态的 API Keys
+  if (Array.isArray(account.apiKeys)) {
+    // 只计算状态不是 'error' 的 API Keys
+    return account.apiKeys.filter((apiKey) => apiKey.status !== 'error').length
+  }
+
+  // 如果是字符串格式的 apiKeys，尝试解析
+  if (typeof account.apiKeys === 'string' && account.apiKeys.trim()) {
+    try {
+      const parsed = JSON.parse(account.apiKeys)
+      if (Array.isArray(parsed)) {
+        // 只计算状态不是 'error' 的 API Keys
+        return parsed.filter((apiKey) => apiKey.status !== 'error').length
+      }
+    } catch (error) {
+      // 忽略解析错误，继续使用其他字段
+    }
+  }
+
   const candidates = [
     account.apiKeyCount,
     account.api_key_count,
@@ -3047,21 +3138,6 @@ const getDroidApiKeyCount = (account) => {
     const value = Number(candidate)
     if (Number.isFinite(value) && value >= 0) {
       return value
-    }
-  }
-
-  if (Array.isArray(account.apiKeys)) {
-    return account.apiKeys.length
-  }
-
-  if (typeof account.apiKeys === 'string' && account.apiKeys.trim()) {
-    try {
-      const parsed = JSON.parse(account.apiKeys)
-      if (Array.isArray(parsed)) {
-        return parsed.length
-      }
-    } catch (error) {
-      // 忽略解析错误，维持默认值
     }
   }
 
@@ -3618,6 +3694,113 @@ watch(paginatedAccounts, () => {
 watch(accounts, () => {
   cleanupSelectedAccounts()
 })
+// 到期时间相关方法
+const formatExpireDate = (dateString) => {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  })
+}
+
+const isExpired = (expiresAt) => {
+  if (!expiresAt) return false
+  return new Date(expiresAt) < new Date()
+}
+
+const isExpiringSoon = (expiresAt) => {
+  if (!expiresAt) return false
+  const now = new Date()
+  const expireDate = new Date(expiresAt)
+  const daysUntilExpire = (expireDate - now) / (1000 * 60 * 60 * 24)
+  return daysUntilExpire > 0 && daysUntilExpire <= 7
+}
+
+// 开始编辑账户过期时间
+const startEditAccountExpiry = (account) => {
+  editingExpiryAccount.value = account
+}
+
+// 关闭账户过期时间编辑
+const closeAccountExpiryEdit = () => {
+  editingExpiryAccount.value = null
+}
+
+// 保存账户过期时间
+const handleSaveAccountExpiry = async ({ accountId, expiresAt }) => {
+  try {
+    // 根据账号平台选择正确的 API 端点
+    const account = accounts.value.find((acc) => acc.id === accountId)
+
+    if (!account) {
+      showToast('未找到账户', 'error')
+      return
+    }
+
+    // 定义每个平台的端点和参数名
+    // 注意：部分平台使用 :accountId，部分使用 :id
+    let endpoint = ''
+    switch (account.platform) {
+      case 'claude':
+      case 'claude-oauth':
+        endpoint = `/admin/claude-accounts/${accountId}`
+        break
+      case 'gemini':
+        endpoint = `/admin/gemini-accounts/${accountId}`
+        break
+      case 'claude-console':
+        endpoint = `/admin/claude-console-accounts/${accountId}`
+        break
+      case 'bedrock':
+        endpoint = `/admin/bedrock-accounts/${accountId}`
+        break
+      case 'ccr':
+        endpoint = `/admin/ccr-accounts/${accountId}`
+        break
+      case 'openai':
+        endpoint = `/admin/openai-accounts/${accountId}` // 使用 :id
+        break
+      case 'droid':
+        endpoint = `/admin/droid-accounts/${accountId}` // 使用 :id
+        break
+      case 'azure_openai':
+        endpoint = `/admin/azure-openai-accounts/${accountId}` // 使用 :id
+        break
+      case 'openai-responses':
+        endpoint = `/admin/openai-responses-accounts/${accountId}` // 使用 :id
+        break
+      default:
+        showToast(`不支持的平台类型: ${account.platform}`, 'error')
+        return
+    }
+
+    const data = await apiClient.put(endpoint, {
+      expiresAt: expiresAt || null
+    })
+
+    if (data.success) {
+      showToast('账户到期时间已更新', 'success')
+      // 更新本地数据
+      account.expiresAt = expiresAt || null
+      closeAccountExpiryEdit()
+    } else {
+      showToast(data.message || '更新失败', 'error')
+      // 重置保存状态
+      if (expiryEditModalRef.value) {
+        expiryEditModalRef.value.resetSaving()
+      }
+    }
+  } catch (error) {
+    console.error('更新账户过期时间失败:', error)
+    showToast('更新失败', 'error')
+    // 重置保存状态
+    if (expiryEditModalRef.value) {
+      expiryEditModalRef.value.resetSaving()
+    }
+  }
+}
 
 onMounted(() => {
   // 首次加载时强制刷新所有数据
@@ -3627,7 +3810,6 @@ onMounted(() => {
 
 <style scoped>
 .table-container {
-  overflow-x: auto;
   border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.05);
 }
@@ -3659,12 +3841,6 @@ onMounted(() => {
 }
 .accounts-container {
   min-height: calc(100vh - 300px);
-}
-
-.table-container {
-  overflow-x: auto;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .table-row {

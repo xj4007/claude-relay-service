@@ -85,6 +85,11 @@ class ClaudeConsoleAccountService {
       lastUsedAt: '',
       status: 'active',
       errorMessage: '',
+
+      // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
+      // 注意：Claude Console 没有 OAuth token，因此没有 expiresAt（token过期）
+      subscriptionExpiresAt: options.subscriptionExpiresAt || null,
+
       // 限流相关
       rateLimitedAt: '',
       rateLimitStatus: '',
@@ -160,6 +165,12 @@ class ClaudeConsoleAccountService {
 
         const accountData = await client.hgetall(key)
         if (accountData && Object.keys(accountData).length > 0) {
+          if (!accountData.id) {
+            logger.warn(`⚠️ 检测到缺少ID的Claude Console账户数据，执行清理: ${key}`)
+            await client.del(key)
+            continue
+          }
+
           // 获取限流状态信息
           const rateLimitInfo = this._getRateLimitInfo(accountData)
 
@@ -184,6 +195,10 @@ class ClaudeConsoleAccountService {
             errorMessage: accountData.errorMessage,
             rateLimitInfo,
             schedulable: accountData.schedulable !== 'false', // 默认为true，只有明确设置为false才不可调度
+
+            // ✅ 前端显示订阅过期时间（业务字段）
+            expiresAt: accountData.subscriptionExpiresAt || null,
+
             // 额度管理相关
             dailyQuota: parseFloat(accountData.dailyQuota || '0'),
             dailyUsage: parseFloat(accountData.dailyUsage || '0'),
@@ -339,6 +354,11 @@ class ClaudeConsoleAccountService {
       // 并发控制相关字段
       if (updates.accountConcurrencyLimit !== undefined) {
         updatedData.accountConcurrencyLimit = updates.accountConcurrencyLimit.toString()
+      }
+      // ✅ 直接保存 subscriptionExpiresAt（如果提供）
+      // Claude Console 没有 token 刷新逻辑，不会覆盖此字段
+      if (updates.subscriptionExpiresAt !== undefined) {
+        updatedData.subscriptionExpiresAt = updates.subscriptionExpiresAt
       }
 
       // 处理账户类型变更
@@ -1110,8 +1130,20 @@ class ClaudeConsoleAccountService {
       return true
     }
 
-    // 检查请求的模型是否在映射表的键中
-    return Object.prototype.hasOwnProperty.call(modelMapping, requestedModel)
+    // 检查请求的模型是否在映射表的键中（精确匹配）
+    if (Object.prototype.hasOwnProperty.call(modelMapping, requestedModel)) {
+      return true
+    }
+
+    // 尝试大小写不敏感匹配
+    const requestedModelLower = requestedModel.toLowerCase()
+    for (const key of Object.keys(modelMapping)) {
+      if (key.toLowerCase() === requestedModelLower) {
+        return true
+      }
+    }
+
+    return false
   }
 
   // 🔄 获取映射后的模型名称
@@ -1121,8 +1153,21 @@ class ClaudeConsoleAccountService {
       return requestedModel
     }
 
-    // 返回映射后的模型，如果不存在则返回原模型
-    return modelMapping[requestedModel] || requestedModel
+    // 精确匹配
+    if (modelMapping[requestedModel]) {
+      return modelMapping[requestedModel]
+    }
+
+    // 大小写不敏感匹配
+    const requestedModelLower = requestedModel.toLowerCase()
+    for (const [key, value] of Object.entries(modelMapping)) {
+      if (key.toLowerCase() === requestedModelLower) {
+        return value
+      }
+    }
+
+    // 如果不存在则返回原模型
+    return requestedModel
   }
 
   // 💰 检查账户使用额度（基于实时统计数据）
@@ -1568,7 +1613,6 @@ class ClaudeConsoleAccountService {
 
 
   // 🔢 账户并发控制方法
-
   // 增加账户并发计数
   async incrAccountConcurrency(accountId, requestId, leaseSeconds = 600) {
     const client = redis.getClientSafe()
@@ -1615,7 +1659,6 @@ class ClaudeConsoleAccountService {
   }
 
   // 🔥 流式超时管理方法
-
   /**
    * 记录流式超时事件
    * @param {string} accountId - 账户ID
@@ -1714,6 +1757,19 @@ class ClaudeConsoleAccountService {
       logger.error(`❌ Failed to get stream timeout details for account ${accountId}:`, error)
       return []
     }
+  }
+  
+  /**
+   * ⏰ 检查账户订阅是否过期
+   * @param {Object} account - 账户对象
+   * @returns {boolean} - true: 已过期, false: 未过期
+   */
+  isSubscriptionExpired(account) {
+    if (!account.subscriptionExpiresAt) {
+      return false // 未设置视为永不过期
+    }
+    const expiryDate = new Date(account.subscriptionExpiresAt)
+    return expiryDate <= new Date()
   }
 }
 

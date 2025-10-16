@@ -29,8 +29,25 @@ class UnifiedClaudeScheduler {
       return true // 没有指定模型时，默认支持
     }
 
-    // Claude OAuth 账户的 Opus 模型检查
+    // Claude OAuth 账户的模型检查
     if (accountType === 'claude-official') {
+      // 1. 首先检查是否为 Claude 官方支持的模型
+      // Claude Official API 只支持 Anthropic 自己的模型,不支持第三方模型(如 deepseek-chat)
+      const isClaudeOfficialModel =
+        requestedModel.startsWith('claude-') ||
+        requestedModel.includes('claude') ||
+        requestedModel.includes('sonnet') ||
+        requestedModel.includes('opus') ||
+        requestedModel.includes('haiku')
+
+      if (!isClaudeOfficialModel) {
+        logger.info(
+          `🚫 Claude official account ${account.name} does not support non-Claude model ${requestedModel}${context ? ` ${context}` : ''}`
+        )
+        return false
+      }
+
+      // 2. Opus 模型的订阅级别检查
       if (requestedModel.toLowerCase().includes('opus')) {
         if (account.subscriptionInfo) {
           try {
@@ -531,6 +548,14 @@ class UnifiedClaudeScheduler {
           continue
         }
 
+        // 检查订阅是否过期
+        if (claudeConsoleAccountService.isSubscriptionExpired(account)) {
+          logger.debug(
+            `⏰ Claude Console account ${account.name} (${account.id}) expired at ${account.subscriptionExpiresAt}`
+          )
+          continue
+        }
+
         // 主动触发一次额度检查，确保状态即时生效
         try {
           await claudeConsoleAccountService.checkQuotaUsage(account.id)
@@ -637,6 +662,14 @@ class UnifiedClaudeScheduler {
         ) {
           // 检查模型支持
           if (!this._isModelSupportedByAccount(account, 'ccr', requestedModel)) {
+            continue
+          }
+
+          // 检查订阅是否过期
+          if (ccrAccountService.isSubscriptionExpired(account)) {
+            logger.debug(
+              `⏰ CCR account ${account.name} (${account.id}) expired at ${account.subscriptionExpiresAt}`
+            )
             continue
           }
 
@@ -910,6 +943,13 @@ class UnifiedClaudeScheduler {
         ) {
           return false
         }
+        // 检查订阅是否过期
+        if (claudeConsoleAccountService.isSubscriptionExpired(account)) {
+          logger.debug(
+            `⏰ Claude Console account ${account.name} (${accountId}) expired at ${account.subscriptionExpiresAt} (session check)`
+          )
+          return false
+        }
         // 检查是否超额
         try {
           await claudeConsoleAccountService.checkQuotaUsage(accountId)
@@ -979,6 +1019,13 @@ class UnifiedClaudeScheduler {
         }
         // 检查模型支持
         if (!this._isModelSupportedByAccount(account, 'ccr', requestedModel, 'in session check')) {
+          return false
+        }
+        // 检查订阅是否过期
+        if (ccrAccountService.isSubscriptionExpired(account)) {
+          logger.debug(
+            `⏰ CCR account ${account.name} (${accountId}) expired at ${account.subscriptionExpiresAt} (session check)`
+          )
           return false
         }
         // 检查是否超额
@@ -1473,6 +1520,14 @@ class UnifiedClaudeScheduler {
           // 检查模型支持
           if (!this._isModelSupportedByAccount(account, 'ccr', requestedModel)) {
             logger.debug(`CCR account ${account.name} does not support model ${requestedModel}`)
+            continue
+          }
+
+          // 检查订阅是否过期
+          if (ccrAccountService.isSubscriptionExpired(account)) {
+            logger.debug(
+              `⏰ CCR account ${account.name} (${account.id}) expired at ${account.subscriptionExpiresAt}`
+            )
             continue
           }
 
