@@ -8,6 +8,9 @@ const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 
+const OFFICIAL_ERROR_ADVICE = '遇到Claude官方错误，请尝试输入继续或者/compact或者/clear来继续处理'
+const PROMPT_TOO_LONG_HINT = 'prompt is too long'
+
 class ClaudeConsoleRelayService {
   constructor() {
     this.defaultUserAgent = 'claude-cli/1.0.119 (external, cli)'
@@ -131,6 +134,7 @@ class ClaudeConsoleRelayService {
 
         // 如果解析成功且有正确的错误结构，直接返回并添加时间戳
         if (parsedError && typeof parsedError === 'object') {
+          this._injectOfficialAdvice(parsedError)
           return {
             ...parsedError,
             timestamp
@@ -144,7 +148,7 @@ class ClaudeConsoleRelayService {
       return {
         error: {
           type: 'api_error',
-          message: errorText || 'Unknown error occurred'
+          message: this._appendOfficialAdvice(errorText || 'Unknown error occurred')
         },
         timestamp
       }
@@ -576,6 +580,11 @@ class ClaudeConsoleRelayService {
           accountId
         }
       } else if (response.status >= 400) {
+        const { message: extractedMessage } = this._extractErrorDetails(response.data)
+        if (response.status === 400 && this._isPromptTooLongError(extractedMessage, response.data)) {
+          await this._handleServerError(accountId, response.status, response.data, requestBody.model)
+        }
+
         // 返回脱敏后的错误信息
         const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
         return {
@@ -1278,6 +1287,7 @@ class ClaudeConsoleRelayService {
 
           // 检查错误状态
           if (error.response) {
+            error.statusCode = error.response.status
             if (error.response.status === 401) {
               claudeConsoleAccountService.markAccountUnauthorized(accountId)
             } else if (error.response.status === 429) {
@@ -1288,6 +1298,26 @@ class ClaudeConsoleRelayService {
               })
             } else if (error.response.status === 529) {
               claudeConsoleAccountService.markAccountOverloaded(accountId)
+            } else if (error.response.status === 400) {
+              const { message: promptErrorMessage } = this._extractErrorDetails(error.response.data)
+              if (this._isPromptTooLongError(promptErrorMessage, error.response.data)) {
+                this._handleServerError(
+                  accountId,
+                  error.response.status,
+                  error.response.data,
+                  body.model
+                ).catch((err) => {
+                  logger.error(`Failed to handle prompt length server error: ${err.message}`)
+                })
+                error.shouldRetryDueToSpecialError = true
+                const currentMessage =
+                  typeof error.message === 'string' ? error.message : 'Upstream 400 error'
+                if (!currentMessage.toLowerCase().includes(PROMPT_TOO_LONG_HINT)) {
+                  error.message = `${currentMessage}: ${PROMPT_TOO_LONG_HINT}`
+                } else {
+                  error.message = currentMessage
+                }
+              }
             } else if (error.response.status >= 500 && error.response.status <= 504) {
               // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
               // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
@@ -1468,7 +1498,16 @@ class ClaudeConsoleRelayService {
           ? 'Timeout (504)'
           : statusCode === 503 || statusCode === 529
             ? 'Service Unavailable'
-            : 'Server Error'
+            : statusCode === 400
+              ? 'Invalid Request (400)'
+              : 'Server Error'
+
+      const errorCode =
+        statusCode >= 500 && statusCode <= 504
+          ? 'CONSECUTIVE_5XX_ERRORS'
+          : statusCode === 400
+            ? 'CONSECUTIVE_400_ERRORS'
+            : `CONSECUTIVE_${statusCode}_ERRORS`
 
       logger.warn(
         `⏱️ ${errorType} for Claude Console account ${accountId}, error count: ${errorCount}/${threshold}`
@@ -1479,11 +1518,69 @@ class ClaudeConsoleRelayService {
         logger.error(
           `❌ Claude Console account ${accountId} reached ${errorType} threshold (${errorCount} errors), marking as temp_error`
         )
-        await claudeConsoleAccountService.markAccountTempError(accountId)
+        await claudeConsoleAccountService.markAccountTempError(accountId, {
+          reason: `Account temporarily disabled due to consecutive ${errorType} responses (${statusCode})`,
+          errorCode,
+          autoRecoveryMinutes: statusCode === 400 ? 6 : undefined
+        })
       }
     } catch (handlingError) {
       logger.error(`❌ Failed to handle server error for account ${accountId}:`, handlingError)
     }
+  }
+
+  _appendOfficialAdvice(message) {
+    const advice = OFFICIAL_ERROR_ADVICE
+    if (typeof message !== 'string' || message.trim().length === 0) {
+      return advice
+    }
+
+    if (message.includes('继续或者/compact或者/clear')) {
+      return message
+    }
+
+    const trimmed = message.trim()
+    const separator = /[。.!？?]$/.test(trimmed) ? ' ' : '。'
+    return `${trimmed}${separator}${advice}`
+  }
+
+  _injectOfficialAdvice(errorPayload) {
+    if (!errorPayload || typeof errorPayload !== 'object') {
+      return
+    }
+
+    if (
+      errorPayload.error &&
+      typeof errorPayload.error === 'object' &&
+      typeof errorPayload.error.message === 'string'
+    ) {
+      errorPayload.error.message = this._appendOfficialAdvice(errorPayload.error.message)
+    } else if (typeof errorPayload.message === 'string') {
+      errorPayload.message = this._appendOfficialAdvice(errorPayload.message)
+    }
+  }
+
+  _isPromptTooLongError(message, rawData) {
+    const candidates = []
+
+    if (typeof message === 'string') {
+      candidates.push(message.toLowerCase())
+    }
+
+    if (rawData !== undefined && rawData !== null) {
+      if (typeof rawData === 'string') {
+        candidates.push(rawData.toLowerCase())
+      } else {
+        try {
+          const serialized = JSON.stringify(rawData)
+          candidates.push(serialized.toLowerCase())
+        } catch (serializationError) {
+          candidates.push(String(rawData).toLowerCase())
+        }
+      }
+    }
+
+    return candidates.some((text) => text.includes(PROMPT_TOO_LONG_HINT))
   }
 
   // 🧠 判断是否为主要Claude模型

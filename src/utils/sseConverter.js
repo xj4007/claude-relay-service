@@ -168,7 +168,8 @@ function isStreamRetryableError(error) {
     error.code === 'ETIMEDOUT' ||
     error.code === 'ECONNABORTED' ||
     error.code === 'ENOTFOUND' ||
-    error.code === 'ECONNREFUSED'
+    error.code === 'ECONNREFUSED' ||
+    error.code === 'EAI_AGAIN'
   ) {
     return true
   }
@@ -180,6 +181,27 @@ function isStreamRetryableError(error) {
 
   // 检查错误消息
   const errorMessage = error.message ? error.message.toLowerCase() : ''
+  if (errorMessage.includes('prompt is too long')) {
+    return true
+  }
+
+  const responseData = error.response?.data
+  if (responseData) {
+    let responseText = ''
+    if (typeof responseData === 'string') {
+      responseText = responseData.toLowerCase()
+    } else {
+      try {
+        responseText = JSON.stringify(responseData).toLowerCase()
+      } catch (stringifyError) {
+        responseText = String(responseData).toLowerCase()
+      }
+    }
+
+    if (responseText.includes('prompt is too long')) {
+      return true
+    }
+  }
   if (
     errorMessage.includes('socket hang up') ||
     errorMessage.includes('connection reset') ||

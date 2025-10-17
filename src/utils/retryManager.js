@@ -32,15 +32,22 @@ class RetryManager {
     }
 
     // 网络错误可重试
-    if (
-      error &&
-      (error.code === 'ECONNRESET' ||
-        error.code === 'ETIMEDOUT' ||
-        error.code === 'ECONNABORTED' ||
-        error.message.includes('socket hang up') ||
-        error.message.includes('Connection reset'))
-    ) {
-      return true
+    if (error) {
+      const errorCode = error.code
+      const errorMessage = typeof error.message === 'string' ? error.message : ''
+
+      if (
+        errorCode === 'ECONNRESET' ||
+        errorCode === 'ETIMEDOUT' ||
+        errorCode === 'ECONNABORTED' ||
+        errorCode === 'EAI_AGAIN' ||
+        errorCode === 'ENOTFOUND' ||
+        errorMessage.includes('socket hang up') ||
+        errorMessage.includes('Connection reset') ||
+        errorMessage.toLowerCase().includes('eai_again')
+      ) {
+        return true
+      }
     }
 
     return false
@@ -106,6 +113,12 @@ class RetryManager {
 
       if (thinkingBudgetError) {
         return 'thinking budget tokens validation error'
+      }
+
+      const promptTooLongError = normalizedText.includes('prompt is too long')
+
+      if (promptTooLongError) {
+        return 'prompt too long 400'
       }
     }
 
