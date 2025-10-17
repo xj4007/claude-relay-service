@@ -60,15 +60,40 @@ class ClaudeCodeValidator {
         ? customThreshold
         : SYSTEM_PROMPT_THRESHOLD
 
+    let hasValidPrompt = false
+    let bestMatchScore = 0
+    const ignoredEntries = []
+
     for (const entry of systemEntries) {
       const rawText = typeof entry?.text === 'string' ? entry.text : ''
       const { bestScore } = bestSimilarityByTemplates(rawText)
-      if (bestScore < threshold) {
-        logger.error(
-          `Claude system prompt similarity below threshold: score=${bestScore.toFixed(4)}, threshold=${threshold}, prompt=${rawText}`
-        )
-        return false
+
+      if (bestScore > bestMatchScore) {
+        bestMatchScore = bestScore
       }
+
+      if (bestScore >= threshold) {
+        hasValidPrompt = true
+      } else if (rawText.trim()) {
+        ignoredEntries.push({ score: bestScore, text: rawText })
+      }
+    }
+
+    if (!hasValidPrompt) {
+      logger.error(
+        `Claude system prompt similarity below threshold: bestScore=${bestMatchScore.toFixed(
+          4
+        )}, threshold=${threshold}`
+      )
+      return false
+    }
+
+    if (ignoredEntries.length > 0) {
+      logger.debug(
+        `Claude system prompt validation accepted with additional entries ignored: ${ignoredEntries
+          .map((item) => `score=${item.score.toFixed(4)}`)
+          .join('; ')}`
+      )
     }
     return true
   }

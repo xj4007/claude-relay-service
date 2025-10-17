@@ -54,16 +54,31 @@ module.exports = {
 ```javascript
 const { bestSimilarityByTemplates, SYSTEM_PROMPT_THRESHOLD } = require('../../utils/contents')
 
-// 检查 system prompt 是否与官方模板匹配（相似度 ≥ 0.5）
-const { bestScore } = bestSimilarityByTemplates(rawText)
-if (bestScore < SYSTEM_PROMPT_THRESHOLD) {
-  return false  // 不是真实的 Claude Code 请求
+let hasValidPrompt = false
+const ignoredEntries = []
+
+for (const entry of systemEntries) {
+  const rawText = typeof entry?.text === 'string' ? entry.text : ''
+  const { bestScore } = bestSimilarityByTemplates(rawText)
+
+  if (bestScore >= SYSTEM_PROMPT_THRESHOLD) {
+    hasValidPrompt = true
+  } else if (rawText.trim()) {
+    ignoredEntries.push({ score: bestScore })
+  }
 }
+
+if (!hasValidPrompt) {
+  return false  // 至少要匹配到一条官方 Claude Code 模板
+}
+
+// 其余未达标的 system prompt 只记调试日志，不会阻断
+return true
 ```
 
 **验证逻辑**：
 1. User-Agent 匹配 `claude-cli/x.x.x`
-2. System prompt 相似度 ≥ 0.5
+2. System prompt 列表中至少有一条与官方模板相似度 ≥ 0.5（其余条目可低于阈值，仅记录调试日志）
 3. 必需 headers：`x-app`, `anthropic-beta`, `anthropic-version`
 4. `metadata.user_id` 格式：`user_{64位}_account__session_{uuid}`
 
@@ -261,7 +276,7 @@ sequenceDiagram
     ClaudeRelayService->>ClaudeCodeValidator: 验证是否真实 Claude Code
     ClaudeCodeValidator->>Contents.js: 获取提示词模板
     Contents.js-->>ClaudeCodeValidator: 返回 promptMap
-    ClaudeCodeValidator->>ClaudeCodeValidator: 相似度比对 (≥0.5)
+    ClaudeCodeValidator->>ClaudeCodeValidator: 相似度比对（≥0.5，仅需命中至少一条）
     ClaudeCodeValidator-->>ClaudeRelayService: 返回验证结果
 
     alt 不是真实 Claude Code
