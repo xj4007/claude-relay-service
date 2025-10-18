@@ -531,71 +531,67 @@ class UnifiedClaudeScheduler {
       }
 
       logger.info(
-        `🔍 Checking Claude Console account: ${currentAccount.name} - isActive: ${currentAccount.isActive}, status: ${currentAccount.status}, accountType: ${currentAccount.accountType}, schedulable: ${currentAccount.schedulable}`
+        `🔍 Checking Claude Console account: ${account.name} - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
       )
 
       // 注意：getAllAccounts返回的isActive是布尔值，getAccount返回的也是布尔值
       if (
-        currentAccount.isActive === true &&
-        currentAccount.status === 'active' &&
-        currentAccount.accountType === 'shared' &&
-        this._isSchedulable(currentAccount.schedulable)
+        account.isActive === true &&
+        account.status === 'active' &&
+        account.accountType === 'shared' &&
+        this._isSchedulable(account.schedulable)
       ) {
         // 检查是否可调度
 
         // 检查模型支持
-        if (!this._isModelSupportedByAccount(currentAccount, 'claude-console', requestedModel)) {
+        if (!this._isModelSupportedByAccount(account, 'claude-console', requestedModel)) {
           continue
         }
 
         // 检查订阅是否过期
-        if (claudeConsoleAccountService.isSubscriptionExpired(currentAccount)) {
+        if (claudeConsoleAccountService.isSubscriptionExpired(account)) {
           logger.debug(
-            `⏰ Claude Console account ${currentAccount.name} (${currentAccount.id}) expired at ${currentAccount.subscriptionExpiresAt}`
+            `⏰ Claude Console account ${account.name} (${account.id}) expired at ${account.subscriptionExpiresAt}`
           )
           continue
         }
 
         // 主动触发一次额度检查，确保状态即时生效
         try {
-          await claudeConsoleAccountService.checkQuotaUsage(currentAccount.id)
+          await claudeConsoleAccountService.checkQuotaUsage(account.id)
         } catch (e) {
           logger.warn(
-            `Failed to check quota for Claude Console account ${currentAccount.name}: ${e.message}`
+            `Failed to check quota for Claude Console account ${account.name}: ${e.message}`
           )
           // 继续处理该账号
         }
 
         // 检查是否被限流
-        const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(
-          currentAccount.id
-        )
-        const isQuotaExceeded = await claudeConsoleAccountService.isAccountQuotaExceeded(
-          currentAccount.id
-        )
+        const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(account.id)
+        const isQuotaExceeded = await claudeConsoleAccountService.isAccountQuotaExceeded(account.id)
 
         if (!isRateLimited && !isQuotaExceeded) {
           availableAccounts.push({
-            ...currentAccount,
-            accountId: currentAccount.id,
+            ...account,
+            accountId: account.id,
             accountType: 'claude-console',
-            priority: parseInt(currentAccount.priority) || 50,
-            lastUsedAt: currentAccount.lastUsedAt || '0'
+            priority: parseInt(account.priority) || 50,
+            lastUsedAt: account.lastUsedAt || '0'
           })
           logger.info(
-            `✅ Added Claude Console account to available pool: ${currentAccount.name} (priority: ${currentAccount.priority})`
+            `✅ Added Claude Console account to available pool: ${account.name} (priority: ${account.priority})`
           )
         } else {
           if (isRateLimited) {
-            logger.warn(`⚠️ Claude Console account ${currentAccount.name} is rate limited`)
+            logger.warn(`⚠️ Claude Console account ${account.name} is rate limited`)
           }
           if (isQuotaExceeded) {
-            logger.warn(`💰 Claude Console account ${currentAccount.name} quota exceeded`)
+            logger.warn(`💰 Claude Console account ${account.name} quota exceeded`)
           }
         }
       } else {
         logger.info(
-          `❌ Claude Console account ${currentAccount.name} not eligible - isActive: ${currentAccount.isActive}, status: ${currentAccount.status}, accountType: ${currentAccount.accountType}, schedulable: ${currentAccount.schedulable}`
+          `❌ Claude Console account ${account.name} not eligible - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
       }
     }
