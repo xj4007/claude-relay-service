@@ -22,6 +22,7 @@ const {
   isStreamRetryableError
 } = require('../utils/sseConverter')
 
+const { sanitizeUpstreamError } = require('../utils/errorSanitizer')
 const router = express.Router()
 
 function queueRateLimitUpdate(rateLimitInfo, usageSummary, model, context = '') {
@@ -1322,7 +1323,13 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
     // 尝试解析并返回JSON响应
     try {
       const jsonData = JSON.parse(response.body)
-      res.json(jsonData)
+      // 对于非 2xx 响应，清理供应商特定信息
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        const sanitizedData = sanitizeUpstreamError(jsonData)
+        res.json(sanitizedData)
+      } else {
+        res.json(jsonData)
+      }
     } catch (parseError) {
       res.send(response.body)
     }

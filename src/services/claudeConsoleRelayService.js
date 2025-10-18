@@ -7,6 +7,11 @@ const responseCacheService = require('./responseCacheService')
 const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
+const {
+  sanitizeUpstreamError,
+  sanitizeErrorMessage,
+  isAccountDisabledError
+} = require('../utils/errorSanitizer')
 
 const OFFICIAL_ERROR_ADVICE = '遇到Claude官方错误，请尝试输入继续或者/compact或者/clear来继续处理'
 const PROMPT_TOO_LONG_HINT = 'prompt is too long'
@@ -620,9 +625,30 @@ class ClaudeConsoleRelayService {
       // 更新最后使用时间
       await this._updateLastUsedTime(accountId)
 
-      const responseBody =
-        typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
-      logger.debug(`[DEBUG] Final response body to return: ${responseBody}`)
+      // 准备响应体并清理错误信息（如果是错误响应）
+      let responseBody
+      if (response.status < 200 || response.status >= 300) {
+        // 错误响应，清理供应商信息
+        try {
+          const responseData =
+            typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+          const sanitizedData = sanitizeUpstreamError(responseData)
+          responseBody = JSON.stringify(sanitizedData)
+          logger.debug(`🧹 Sanitized error response`)
+        } catch (parseError) {
+          // 如果无法解析为JSON，尝试清理文本
+          const rawText =
+            typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+          responseBody = sanitizeErrorMessage(rawText)
+          logger.debug(`🧹 Sanitized error text`)
+        }
+      } else {
+        // 成功响应，不需要清理
+        responseBody =
+          typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+      }
+
+      logger.debug(`[DEBUG] Final response body to return: ${responseBody.substring(0, 200)}...`)
 
       return {
         statusCode: response.status,
@@ -994,6 +1020,7 @@ class ClaudeConsoleRelayService {
               this._sendSanitizedStreamError(responseStream, response.status, errorData, accountId)
               resolve()
             })
+
             return
           }
 
