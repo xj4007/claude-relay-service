@@ -137,6 +137,9 @@
 
           <!-- 模型使用统计 -->
           <ModelUsageStats />
+
+          <!-- 交易明细（仅单Key模式显示） -->
+          <TransactionLog v-if="!multiKeyMode" />
         </div>
       </div>
     </div>
@@ -164,6 +167,7 @@ import TokenDistribution from '@/components/apistats/TokenDistribution.vue'
 import LimitConfig from '@/components/apistats/LimitConfig.vue'
 import AggregatedStatsCard from '@/components/apistats/AggregatedStatsCard.vue'
 import ModelUsageStats from '@/components/apistats/ModelUsageStats.vue'
+import TransactionLog from '@/components/apistats/TransactionLog.vue'
 import TutorialView from './TutorialView.vue'
 
 const route = useRoute()

@@ -92,6 +92,14 @@ class ApiStatsClient {
       body: JSON.stringify({ apiIds, period })
     })
   }
+
+  // 获取交易日志
+  async getTransactionLogs(apiId, startTime = null, endTime = null, page = 1, pageSize = 10) {
+    return this.request('/apiStats/api/transaction-logs', {
+      method: 'POST',
+      body: JSON.stringify({ apiId, startTime, endTime, page, pageSize })
+    })
+  }
 }
 
 export const apiStatsClient = new ApiStatsClient()

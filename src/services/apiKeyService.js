@@ -1203,6 +1203,46 @@ class ApiKeyService {
 
       await redis.addUsageRecord(keyId, usageRecord)
 
+      // 📝 记录交易日志（用于前端查询）- 简化版本，确保记录成功
+      try {
+        let remainingQuota = null
+
+        // 尝试获取剩余额度，如果失败也继续记录
+        try {
+          const keyData = await redis.getApiKey(keyId)
+          const totalCostLimit = parseFloat(keyData.totalCostLimit || 0)
+          const dailyCostLimit = parseFloat(keyData.dailyCostLimit || 0)
+
+          if (totalCostLimit > 0 || dailyCostLimit > 0) {
+            const costStats = await redis.getCostStats(keyId)
+            const dailyCost = await redis.getDailyCost(keyId)
+
+            if (totalCostLimit > 0) {
+              remainingQuota = totalCostLimit - (costStats?.total || 0)
+            } else if (dailyCostLimit > 0) {
+              remainingQuota = dailyCostLimit - (dailyCost || 0)
+            }
+          }
+        } catch (quotaError) {
+          logger.debug(`Could not calculate remaining quota: ${quotaError.message}`)
+          // 继续记录，只是 remainingQuota 为 null
+        }
+
+        // 记录交易日志，即使没有剩余额度信息也要记录
+        await redis.addTransactionLog(keyId, {
+          model,
+          inputTokens,
+          outputTokens,
+          cacheCreateTokens,
+          cacheReadTokens,
+          cost: costInfo.totalCost || 0,
+          remainingQuota
+        })
+      } catch (logError) {
+        logger.error(`❌ Failed to add transaction log for key ${keyId}:`, logError)
+        logger.error(`   Error details:`, logError.stack)
+      }
+
       const logParts = [`Model: ${model}`, `Input: ${inputTokens}`, `Output: ${outputTokens}`]
       if (cacheCreateTokens > 0) {
         logParts.push(`Cache Create: ${cacheCreateTokens}`)

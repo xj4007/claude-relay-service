@@ -940,4 +940,104 @@ router.post('/api/user-model-stats', async (req, res) => {
   }
 })
 
+// 📊 交易日志查询接口
+router.post('/api/transaction-logs', async (req, res) => {
+  try {
+    const { apiId, startTime, endTime, page, pageSize } = req.body
+
+    // 验证 apiId
+    if (
+      !apiId ||
+      typeof apiId !== 'string' ||
+      !apiId.match(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i)
+    ) {
+      return res.status(400).json({
+        error: 'Invalid API ID format',
+        message: 'API ID must be a valid UUID'
+      })
+    }
+
+    // 验证 API Key 是否存在且激活
+    const keyData = await redis.getApiKey(apiId)
+    if (!keyData || Object.keys(keyData).length === 0) {
+      logger.security(`🔒 API key not found for ID: ${apiId} from ${req.ip || 'unknown'}`)
+      return res.status(404).json({
+        error: 'API key not found',
+        message: 'The specified API key does not exist'
+      })
+    }
+
+    if (keyData.isActive !== 'true') {
+      return res.status(403).json({
+        error: 'API key is disabled',
+        message: 'This API key has been disabled'
+      })
+    }
+
+    // 验证时间范围（可选）
+    let start = null
+    let end = null
+
+    if (startTime) {
+      start = parseInt(startTime)
+      if (isNaN(start) || start < 0) {
+        return res.status(400).json({
+          error: 'Invalid start time',
+          message: 'Start time must be a valid timestamp'
+        })
+      }
+    }
+
+    if (endTime) {
+      end = parseInt(endTime)
+      if (isNaN(end) || end < 0) {
+        return res.status(400).json({
+          error: 'Invalid end time',
+          message: 'End time must be a valid timestamp'
+        })
+      }
+    }
+
+    // 验证分页参数
+    let currentPage = 1
+    let currentPageSize = 10
+
+    if (page) {
+      currentPage = parseInt(page)
+      if (isNaN(currentPage) || currentPage < 1) {
+        currentPage = 1
+      }
+    }
+
+    if (pageSize) {
+      currentPageSize = parseInt(pageSize)
+      if (isNaN(currentPageSize) || currentPageSize < 1 || currentPageSize > 100) {
+        currentPageSize = 10
+      }
+    }
+
+    // 查询交易日志（带分页）
+    const result = await redis.getTransactionLogs(apiId, start, end, currentPage, currentPageSize)
+
+    logger.api(
+      `📊 Transaction logs query for key: ${keyData.name} (${apiId}), page: ${currentPage}, total: ${result.pagination.total}`
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        logs: result.logs,
+        pagination: result.pagination,
+        retentionHours: 24
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Failed to process transaction logs query:', error)
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to retrieve transaction logs'
+    })
+  }
+})
+
 module.exports = router

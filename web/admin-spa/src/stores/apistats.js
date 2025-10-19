@@ -29,6 +29,21 @@ export const useApiStatsStore = defineStore('apistats', () => {
   const individualStats = ref([]) // 各个 Key 的独立数据
   const invalidKeys = ref([]) // 无效的 Keys 列表
 
+  // 交易日志相关状态
+  const transactionLogs = ref([])
+  const transactionLogsLoading = ref(false)
+  const transactionLogsError = ref('')
+  const transactionLogsDateRange = ref({
+    start: null,
+    end: null
+  })
+  const transactionLogsPagination = ref({
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    totalPages: 0
+  })
+
   // 计算属性
   const currentPeriodData = computed(() => {
     const defaultData = {
@@ -126,6 +141,9 @@ export const useApiStatsStore = defineStore('apistats', () => {
 
           // 同时加载今日和本月的统计数据
           await loadAllPeriodStats()
+
+          // 加载交易日志（默认查询最近24小时）
+          await loadTransactionLogs()
 
           // 清除错误信息
           error.value = ''
@@ -276,6 +294,9 @@ export const useApiStatsStore = defineStore('apistats', () => {
 
         // 同时加载今日和本月的统计数据
         await loadAllPeriodStats()
+
+        // 加载交易日志（默认查询最近24小时）
+        await loadTransactionLogs()
 
         // 清除错误信息
         error.value = ''
@@ -461,6 +482,72 @@ export const useApiStatsStore = defineStore('apistats', () => {
     apiKey.value = ''
   }
 
+  // 加载交易日志
+  async function loadTransactionLogs(startTime = null, endTime = null, page = null) {
+    if (!apiId.value) {
+      transactionLogsError.value = '请先查询 API Key'
+      return
+    }
+
+    // 如果没有指定页码，使用当前页码
+    const currentPage = page || transactionLogsPagination.value.page
+
+    transactionLogsLoading.value = true
+    transactionLogsError.value = ''
+
+    try {
+      const result = await apiStatsClient.getTransactionLogs(
+        apiId.value,
+        startTime,
+        endTime,
+        currentPage,
+        transactionLogsPagination.value.pageSize
+      )
+
+      if (result.success) {
+        transactionLogs.value = result.data.logs || []
+        transactionLogsPagination.value = result.data.pagination || {
+          page: 1,
+          pageSize: 10,
+          total: 0,
+          totalPages: 0
+        }
+        transactionLogsError.value = ''
+      } else {
+        throw new Error(result.message || '加载交易日志失败')
+      }
+    } catch (err) {
+      console.error('Load transaction logs error:', err)
+      transactionLogsError.value = err.message || '加载交易日志失败'
+      transactionLogs.value = []
+      transactionLogsPagination.value = {
+        page: 1,
+        pageSize: 10,
+        total: 0,
+        totalPages: 0
+      }
+    } finally {
+      transactionLogsLoading.value = false
+    }
+  }
+
+  // 设置日志页码
+  async function setTransactionLogsPage(page) {
+    transactionLogsPagination.value.page = page
+    await loadTransactionLogs(
+      transactionLogsDateRange.value.start,
+      transactionLogsDateRange.value.end,
+      page
+    )
+  }
+
+  // 设置日期范围并重新加载
+  async function setTransactionLogsDateRange(start, end) {
+    transactionLogsDateRange.value = { start, end }
+    transactionLogsPagination.value.page = 1 // 重置为第一页
+    await loadTransactionLogs(start, end, 1)
+  }
+
   // 清除数据
   function clearData() {
     statsData.value = null
@@ -476,6 +563,11 @@ export const useApiStatsStore = defineStore('apistats', () => {
     aggregatedStats.value = null
     individualStats.value = []
     invalidKeys.value = []
+    // 清除交易日志数据
+    transactionLogs.value = []
+    transactionLogsError.value = ''
+    transactionLogsDateRange.value = { start: null, end: null }
+    transactionLogsPagination.value = { page: 1, pageSize: 10, total: 0, totalPages: 0 }
   }
 
   // 重置
@@ -506,6 +598,12 @@ export const useApiStatsStore = defineStore('apistats', () => {
     aggregatedStats,
     individualStats,
     invalidKeys,
+    // 交易日志状态
+    transactionLogs,
+    transactionLogsLoading,
+    transactionLogsError,
+    transactionLogsDateRange,
+    transactionLogsPagination,
 
     // Computed
     currentPeriodData,
@@ -523,6 +621,10 @@ export const useApiStatsStore = defineStore('apistats', () => {
     loadOemSettings,
     clearData,
     clearInput,
-    reset
+    reset,
+    // 交易日志方法
+    loadTransactionLogs,
+    setTransactionLogsDateRange,
+    setTransactionLogsPage
   }
 })

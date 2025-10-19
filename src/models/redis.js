@@ -1989,6 +1989,104 @@ redisClient.releaseAccountLock = async function (lockKey, lockValue) {
   }
 }
 
+// 📝 交易日志相关方法（24小时保留）
+redisClient.addTransactionLog = async function (keyId, logData) {
+  try {
+    const logKey = `transaction_log:${keyId}`
+    const timestamp = Date.now()
+    const logEntry = JSON.stringify({
+      timestamp,
+      ...logData
+    })
+
+    const client = this.getClientSafe()
+    const pipeline = client.pipeline()
+
+    // 添加日志条目（使用时间戳作为score）
+    pipeline.zadd(logKey, timestamp, logEntry)
+
+    // 删除24小时前的旧数据
+    const oneDayAgo = timestamp - 24 * 60 * 60 * 1000
+    pipeline.zremrangebyscore(logKey, '-inf', oneDayAgo)
+
+    // 设置key过期时间为25小时（留一点余量）
+    pipeline.expire(logKey, 25 * 60 * 60)
+
+    await pipeline.exec()
+  } catch (error) {
+    logger.error(`Failed to add transaction log for key ${keyId}:`, error)
+  }
+}
+
+redisClient.getTransactionLogs = async function (
+  keyId,
+  startTime = null,
+  endTime = null,
+  page = 1,
+  pageSize = 10
+) {
+  try {
+    const logKey = `transaction_log:${keyId}`
+    const client = this.getClientSafe()
+
+    // 如果没有指定时间范围，默认查询最近24小时
+    const now = Date.now()
+    const start = startTime || now - 24 * 60 * 60 * 1000
+    const end = endTime || now
+
+    // 计算总数
+    const total = await client.zcount(logKey, start, end)
+
+    // 计算分页参数
+    const offset = (page - 1) * pageSize
+    const totalPages = Math.ceil(total / pageSize)
+
+    // 使用 ZREVRANGEBYSCORE 倒序查询（最新的在前）+ LIMIT 实现分页
+    // Redis ZREVRANGEBYSCORE 的 LIMIT 语法: LIMIT offset count
+    const logs = await client.zrevrangebyscore(
+      logKey,
+      end, // max score
+      start, // min score
+      'LIMIT',
+      offset,
+      pageSize
+    )
+
+    // 解析JSON并返回
+    const parsedLogs = logs
+      .map((log) => {
+        try {
+          return JSON.parse(log)
+        } catch (e) {
+          logger.warn(`Failed to parse transaction log: ${log}`)
+          return null
+        }
+      })
+      .filter((log) => log !== null)
+
+    return {
+      logs: parsedLogs,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages
+      }
+    }
+  } catch (error) {
+    logger.error(`Failed to get transaction logs for key ${keyId}:`, error)
+    return {
+      logs: [],
+      pagination: {
+        page: 1,
+        pageSize: 10,
+        total: 0,
+        totalPages: 0
+      }
+    }
+  }
+}
+
 // 导出时区辅助函数
 redisClient.getDateInTimezone = getDateInTimezone
 redisClient.getDateStringInTimezone = getDateStringInTimezone
