@@ -690,14 +690,18 @@ async function handleGenerateContent(req, res) {
     if (response?.response?.usageMetadata) {
       try {
         const usage = response.response.usageMetadata
-        await apiKeyService.recordUsage(
+        const usageObject = {
+          input_tokens: usage.promptTokenCount || 0,
+          output_tokens: usage.candidatesTokenCount || 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0
+        }
+        await apiKeyService.recordUsageWithDetails(
           req.apiKey.id,
-          usage.promptTokenCount || 0,
-          usage.candidatesTokenCount || 0,
-          0, // cacheCreateTokens
-          0, // cacheReadTokens
+          usageObject,
           model,
-          account.id
+          account.id,
+          'gemini'
         )
         logger.info(
           `📊 Recorded Gemini usage - Input: ${usage.promptTokenCount}, Output: ${usage.candidatesTokenCount}, Total: ${usage.totalTokenCount}`
@@ -958,14 +962,18 @@ async function handleStreamGenerateContent(req, res) {
       // 记录使用统计
       if (!usageReported && totalUsage.totalTokenCount > 0) {
         try {
-          await apiKeyService.recordUsage(
+          const usageObject = {
+            input_tokens: totalUsage.promptTokenCount || 0,
+            output_tokens: totalUsage.candidatesTokenCount || 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
+          await apiKeyService.recordUsageWithDetails(
             req.apiKey.id,
-            totalUsage.promptTokenCount || 0,
-            totalUsage.candidatesTokenCount || 0,
-            0, // cacheCreateTokens
-            0, // cacheReadTokens
+            usageObject,
             model,
-            account.id
+            account.id,
+            'gemini'
           )
           logger.info(
             `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`

@@ -500,14 +500,18 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
         if (!usageReported && totalUsage.totalTokenCount > 0) {
           try {
             const apiKeyService = require('../services/apiKeyService')
-            await apiKeyService.recordUsage(
+            const usageObject = {
+              input_tokens: totalUsage.promptTokenCount || 0,
+              output_tokens: totalUsage.candidatesTokenCount || 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0
+            }
+            await apiKeyService.recordUsageWithDetails(
               apiKeyData.id,
-              totalUsage.promptTokenCount || 0,
-              totalUsage.candidatesTokenCount || 0,
-              0, // cacheCreateTokens
-              0, // cacheReadTokens
+              usageObject,
               model,
-              account.id
+              account.id,
+              'gemini'
             )
             logger.info(
               `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`
@@ -563,14 +567,18 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
       if (openaiResponse.usage) {
         try {
           const apiKeyService = require('../services/apiKeyService')
-          await apiKeyService.recordUsage(
+          const usageObject = {
+            input_tokens: openaiResponse.usage.prompt_tokens || 0,
+            output_tokens: openaiResponse.usage.completion_tokens || 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
+          await apiKeyService.recordUsageWithDetails(
             apiKeyData.id,
-            openaiResponse.usage.prompt_tokens || 0,
-            openaiResponse.usage.completion_tokens || 0,
-            0, // cacheCreateTokens
-            0, // cacheReadTokens
+            usageObject,
             model,
-            account.id
+            account.id,
+            'gemini'
           )
           logger.info(
             `📊 Recorded Gemini usage - Input: ${openaiResponse.usage.prompt_tokens}, Output: ${openaiResponse.usage.completion_tokens}, Total: ${openaiResponse.usage.total_tokens}`

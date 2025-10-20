@@ -938,6 +938,28 @@ class ApiKeyService {
         logger.debug(`💰 No cost recorded for ${keyId} - zero cost for model: ${model}`)
       }
 
+      // 📝 在记录费用之后计算剩余额度（消费后的实际余额）
+      let remainingQuotaAfterCharge = null
+      try {
+        const keyData = await redis.getApiKey(keyId)
+        const totalCostLimit = parseFloat(keyData.totalCostLimit || 0)
+        const dailyCostLimit = parseFloat(keyData.dailyCostLimit || 0)
+
+        if (totalCostLimit > 0 || dailyCostLimit > 0) {
+          const costStats = await redis.getCostStats(keyId)
+          const dailyCost = await redis.getDailyCost(keyId)
+
+          if (totalCostLimit > 0) {
+            // Calculate remaining quota after this charge (actual remaining balance)
+            remainingQuotaAfterCharge = totalCostLimit - (costStats?.total || 0)
+          } else if (dailyCostLimit > 0) {
+            remainingQuotaAfterCharge = dailyCostLimit - (dailyCost || 0)
+          }
+        }
+      } catch (quotaError) {
+        logger.debug(`Could not calculate remaining quota after charge: ${quotaError.message}`)
+      }
+
       // 获取API Key数据以确定关联的账户
       const keyData = await redis.getApiKey(keyId)
       if (keyData && Object.keys(keyData).length > 0) {
@@ -981,6 +1003,22 @@ class ApiKeyService {
         cost: Number(usageCost.toFixed(6)),
         costBreakdown: costInfo && costInfo.costs ? costInfo.costs : undefined
       })
+
+      // 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
+      try {
+        await redis.addTransactionLog(keyId, {
+          model,
+          inputTokens,
+          outputTokens,
+          cacheCreateTokens,
+          cacheReadTokens,
+          cost: costInfo.costs.total || 0,
+          remainingQuota: remainingQuotaAfterCharge
+        })
+      } catch (logError) {
+        logger.error(`❌ Failed to add transaction log for key ${keyId}:`, logError)
+        logger.error(`   Error details:`, logError.stack)
+      }
 
       const logParts = [`Model: ${model}`, `Input: ${inputTokens}`, `Output: ${outputTokens}`]
       if (cacheCreateTokens > 0) {
@@ -1203,32 +1241,30 @@ class ApiKeyService {
 
       await redis.addUsageRecord(keyId, usageRecord)
 
-      // 📝 记录交易日志（用于前端查询）- 简化版本，确保记录成功
+      // 📝 在记录交易日志前计算消费后的剩余额度
+      let remainingQuotaAfterCharge = null
       try {
-        let remainingQuota = null
+        const keyData = await redis.getApiKey(keyId)
+        const totalCostLimit = parseFloat(keyData.totalCostLimit || 0)
+        const dailyCostLimit = parseFloat(keyData.dailyCostLimit || 0)
 
-        // 尝试获取剩余额度，如果失败也继续记录
-        try {
-          const keyData = await redis.getApiKey(keyId)
-          const totalCostLimit = parseFloat(keyData.totalCostLimit || 0)
-          const dailyCostLimit = parseFloat(keyData.dailyCostLimit || 0)
+        if (totalCostLimit > 0 || dailyCostLimit > 0) {
+          const costStats = await redis.getCostStats(keyId)
+          const dailyCost = await redis.getDailyCost(keyId)
 
-          if (totalCostLimit > 0 || dailyCostLimit > 0) {
-            const costStats = await redis.getCostStats(keyId)
-            const dailyCost = await redis.getDailyCost(keyId)
-
-            if (totalCostLimit > 0) {
-              remainingQuota = totalCostLimit - (costStats?.total || 0)
-            } else if (dailyCostLimit > 0) {
-              remainingQuota = dailyCostLimit - (dailyCost || 0)
-            }
+          if (totalCostLimit > 0) {
+            // Calculate remaining quota after this charge (actual remaining balance)
+            remainingQuotaAfterCharge = totalCostLimit - (costStats?.total || 0)
+          } else if (dailyCostLimit > 0) {
+            remainingQuotaAfterCharge = dailyCostLimit - (dailyCost || 0)
           }
-        } catch (quotaError) {
-          logger.debug(`Could not calculate remaining quota: ${quotaError.message}`)
-          // 继续记录，只是 remainingQuota 为 null
         }
+      } catch (quotaError) {
+        logger.debug(`Could not calculate remaining quota after charge: ${quotaError.message}`)
+      }
 
-        // 记录交易日志，即使没有剩余额度信息也要记录
+      // 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
+      try {
         await redis.addTransactionLog(keyId, {
           model,
           inputTokens,
@@ -1236,7 +1272,7 @@ class ApiKeyService {
           cacheCreateTokens,
           cacheReadTokens,
           cost: costInfo.totalCost || 0,
-          remainingQuota
+          remainingQuota: remainingQuotaAfterCharge
         })
       } catch (logError) {
         logger.error(`❌ Failed to add transaction log for key ${keyId}:`, logError)
