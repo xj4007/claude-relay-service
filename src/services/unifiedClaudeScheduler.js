@@ -140,13 +140,20 @@ class UnifiedClaudeScheduler {
   }
 
   // 🎯 统一调度Claude账号（官方和Console）
-  async selectAccountForApiKey(apiKeyData, sessionHash = null, requestedModel = null, options = {}) {
+  async selectAccountForApiKey(
+    apiKeyData,
+    sessionHash = null,
+    requestedModel = null,
+    options = {}
+  ) {
     try {
       // 🔄 支持排除账户列表（用于重试机制）
       const { excludedAccounts = [] } = options
 
       if (excludedAccounts.length > 0) {
-        logger.debug(`🚫 Excluding ${excludedAccounts.length} accounts from selection: ${excludedAccounts.join(', ')}`)
+        logger.debug(
+          `🚫 Excluding ${excludedAccounts.length} accounts from selection: ${excludedAccounts.join(', ')}`
+        )
       }
 
       // 解析供应商前缀
@@ -164,7 +171,12 @@ class UnifiedClaudeScheduler {
       // 如果是 CCR 前缀，只在 CCR 账户池中选择
       if (vendor === 'ccr') {
         logger.info(`🎯 CCR vendor prefix detected, routing to CCR accounts only`)
-        return await this._selectCcrAccount(apiKeyData, sessionHash, effectiveModel, excludedAccounts)
+        return await this._selectCcrAccount(
+          apiKeyData,
+          sessionHash,
+          effectiveModel,
+          excludedAccounts
+        )
       }
       // 如果API Key绑定了专属账户或分组，优先使用
       if (apiKeyData.claudeAccountId) {
@@ -273,10 +285,15 @@ class UnifiedClaudeScheduler {
       // 如果有会话哈希，优先尝试复用粘性会话映射
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
-        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, effectiveModel, {
-          excludedAccounts,
-          vendor
-        })
+        const reusedAccount = await this._tryReuseStickyMapping(
+          sessionHash,
+          mappedAccount,
+          effectiveModel,
+          {
+            excludedAccounts,
+            vendor
+          }
+        )
         if (reusedAccount) {
           return reusedAccount
         }
@@ -334,7 +351,12 @@ class UnifiedClaudeScheduler {
   }
 
   // 📋 获取所有可用账户（合并官方和Console）
-  async _getAllAvailableAccounts(apiKeyData, requestedModel = null, includeCcr = false, excludedAccounts = []) {
+  async _getAllAvailableAccounts(
+    apiKeyData,
+    requestedModel = null,
+    includeCcr = false,
+    excludedAccounts = []
+  ) {
     const availableAccounts = []
     const isOpusRequest =
       requestedModel && typeof requestedModel === 'string'
@@ -776,16 +798,18 @@ class UnifiedClaudeScheduler {
         currentConcurrency = await claudeConsoleAccountService.getAccountConcurrency(accountId)
         if (currentConcurrency < limit) {
           logger.info(
-            `🕒 Sticky concurrency wait succeeded for account ${accountId}: ${currentConcurrency}/${limit} after ${polls} poll(s)` +
-              (sessionHash ? ` | session ${sessionHash}` : '')
+            `🕒 Sticky concurrency wait succeeded for account ${accountId}: ${currentConcurrency}/${limit} after ${polls} poll(s)${
+              sessionHash ? ` | session ${sessionHash}` : ''
+            }`
           )
           return true
         }
       }
 
       logger.warn(
-        `⌛ Sticky account ${accountId} still at limit (${currentConcurrency}/${limit}) after waiting ${maxWaitMs}ms` +
-          (sessionHash ? ` | session ${sessionHash}` : '')
+        `⌛ Sticky account ${accountId} still at limit (${currentConcurrency}/${limit}) after waiting ${maxWaitMs}ms${
+          sessionHash ? ` | session ${sessionHash}` : ''
+        }`
       )
       return false
     } catch (error) {
@@ -800,8 +824,8 @@ class UnifiedClaudeScheduler {
     }
 
     const { excludedAccounts = [], vendor = null, allowedAccountIds = null } = options
-    const accountId = mappedAccount.accountId
-    const accountType = mappedAccount.accountType
+    const { accountId } = mappedAccount
+    const { accountType } = mappedAccount
 
     if (!accountId || !accountType) {
       await this._deleteSessionMapping(sessionHash)
@@ -976,9 +1000,8 @@ class UnifiedClaudeScheduler {
         // 检查账户并发限制
         const accountConcurrencyLimit = parseInt(account.accountConcurrencyLimit) || 0
         if (accountConcurrencyLimit > 0) {
-          const currentConcurrency = await claudeConsoleAccountService.getAccountConcurrency(
-            accountId
-          )
+          const currentConcurrency =
+            await claudeConsoleAccountService.getAccountConcurrency(accountId)
           if (currentConcurrency >= accountConcurrencyLimit) {
             logger.debug(
               `⏸️ Claude Console account ${account.name} at concurrency limit (${currentConcurrency}/${accountConcurrencyLimit})`
@@ -1301,11 +1324,16 @@ class UnifiedClaudeScheduler {
 
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
-        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, requestedModel, {
-          excludedAccounts,
-          vendor: allowCcr ? 'ccr' : null,
-          allowedAccountIds: memberIdSet
-        })
+        const reusedAccount = await this._tryReuseStickyMapping(
+          sessionHash,
+          mappedAccount,
+          requestedModel,
+          {
+            excludedAccounts,
+            vendor: allowCcr ? 'ccr' : null,
+            allowedAccountIds: memberIdSet
+          }
+        )
         if (reusedAccount) {
           return reusedAccount
         }
@@ -1316,6 +1344,9 @@ class UnifiedClaudeScheduler {
         requestedModel && typeof requestedModel === 'string'
           ? requestedModel.toLowerCase().includes('opus')
           : false
+
+      // 🔄 创建排除账户的Set以便快速查找
+      const excludedSet = new Set(excludedAccounts)
 
       // 获取所有成员账户的详细信息
       for (const memberId of memberIds) {
@@ -1351,6 +1382,14 @@ class UnifiedClaudeScheduler {
 
         if (!account) {
           logger.warn(`⚠️ Account ${memberId} not found in group ${group.name}`)
+          continue
+        }
+
+        // 🔄 检查是否在排除列表中
+        if (excludedSet.has(account.id)) {
+          logger.debug(
+            `🚫 Excluding account ${account.name} (${account.id}) from group ${group.name} selection`
+          )
           continue
         }
 
@@ -1438,22 +1477,35 @@ class UnifiedClaudeScheduler {
   }
 
   // 🎯 专门选择CCR账户（仅限CCR前缀路由使用）
-  async _selectCcrAccount(apiKeyData, sessionHash = null, effectiveModel = null, excludedAccounts = []) {
+  async _selectCcrAccount(
+    apiKeyData,
+    sessionHash = null,
+    effectiveModel = null,
+    excludedAccounts = []
+  ) {
     try {
       // 1. 检查会话粘性
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
-        const reusedAccount = await this._tryReuseStickyMapping(sessionHash, mappedAccount, effectiveModel, {
-          excludedAccounts,
-          vendor: 'ccr'
-        })
+        const reusedAccount = await this._tryReuseStickyMapping(
+          sessionHash,
+          mappedAccount,
+          effectiveModel,
+          {
+            excludedAccounts,
+            vendor: 'ccr'
+          }
+        )
         if (reusedAccount) {
           return reusedAccount
         }
       }
 
       // 2. 获取所有可用的CCR账户（传递排除列表）
-      const availableCcrAccounts = await this._getAvailableCcrAccounts(effectiveModel, excludedAccounts)
+      const availableCcrAccounts = await this._getAvailableCcrAccounts(
+        effectiveModel,
+        excludedAccounts
+      )
 
       if (availableCcrAccounts.length === 0) {
         throw new Error(
