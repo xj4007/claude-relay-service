@@ -21,14 +21,12 @@ class ClaudeCodeRequestEnhancer {
     this.claudeCodeSystemBase = {
       type: 'text',
       text: promptMap.claudeOtherSystemPrompt1
-      // cache_control: { type: 'ephemeral' }
     }
 
     // 完整的Claude Code详细指令（从 contents.js 获取）
     this.claudeCodeDetailedInstructions = {
       type: 'text',
       text: promptMap.claudeOtherSystemPrompt2
-      // cache_control: { type: 'ephemeral' }
     }
 
     // Agent SDK 相关提示词（未来可能需要）
@@ -238,8 +236,12 @@ class ClaudeCodeRequestEnhancer {
         }
       }
 
-      // 在开头插入system-reminder消息
-      firstUserMsg.content.unshift(...this.systemReminderMessages)
+      // 在开头插入system-reminder消息（不包含cache_control，因为这些是用户消息的一部分）
+      const remindersWithoutCache = this.systemReminderMessages.map((msg) => ({
+        type: msg.type,
+        text: msg.text
+      }))
+      firstUserMsg.content.unshift(...remindersWithoutCache)
       logger.debug('✅ Injected system-reminder messages')
     }
   }

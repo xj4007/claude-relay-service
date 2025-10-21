@@ -23,7 +23,7 @@ class ClaudeCodeHeadersService {
       'x-stainless-runtime-version': 'v20.19.1',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
-      'user-agent': 'claude-cli/2.0.19 (external, cli)',
+      'user-agent': 'claude-cli/2.0.24 (external, cli)',
       'accept-language': '*',
       'sec-fetch-mode': 'cors',
       'accept-encoding': 'br, gzip, deflate',
