@@ -822,11 +822,235 @@ const concurrency = await client.zcard(`account_concurrency_zset:${accountId}`)
 
 ---
 
+## 🐛 重要修复：并发限制重试机制（2025-01-21）
+
+### 修复的问题
+
+在早期版本中，当账户并发限制被触发时，存在一个关键BUG导致请求直接失败而不是切换账户。
+
+#### 问题症状
+
+**环境配置**：
+```bash
+# 启用粘性会话等待机制（期望等待30秒）
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=30000
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=1000
+
+# 账户配置
+Account Concurrency Limit: 1
+```
+
+**错误行为**：
+1. 请求1占用账户A的并发槽位（1/1）
+2. 请求2检测到并发超限，抛出 `ACCOUNT_CONCURRENCY_EXCEEDED` 错误
+3. **BUG**：错误被误判为"不可重试"，直接返回失败 ❌
+4. 用户立即看到错误，但实际上有其他可用账户
+
+**错误日志示例**：
+```
+🎯 Stream attempt 1/3 using account: anyrouter-augmunt1
+🚫 [STREAM] Account anyrouter-augmunt1 concurrency limit exceeded: 2/1
+❌ [STREAM-ERR] Account concurrency limit exceeded: 2/1
+⚠️ Non-retryable stream error, stopping  ❌ 错误判断
+❌ All stream attempts exhausted, sending error
+```
+
+#### 根本原因
+
+**两个逻辑冲突**：
+
+1. **粘性会话等待机制**（`unifiedClaudeScheduler.js:_ensureStickyConsoleConcurrency()`）
+   - 设计：当粘性会话账户满载时，等待最多30秒看是否有空位释放
+   - 超时后删除粘性映射，切换到其他账户
+   - ✅ **这个逻辑是正确的**
+
+2. **错误识别逻辑**（`sseConverter.js` 和 `retryManager.js`）
+   - BUG：`isStreamRetryableError()` 和 `isRetryableError()` 没有识别 `ACCOUNT_CONCURRENCY_EXCEEDED`
+   - 结果：被当作"不可重试"错误，**���过了粘性等待机制**
+   - ❌ **这是BUG所在**
+
+### 修复方案
+
+#### 修复文件 1：`src/utils/sseConverter.js`
+
+```javascript
+function isStreamRetryableError(error) {
+  // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
+  // 这是设计上的可重试错误，粘性会话机制会先等待30秒（STICKY_CONCURRENCY_MAX_WAIT_MS）
+  // 如果等待后仍然超限，则应该切换账号
+  if (error.accountConcurrencyExceeded === true) {
+    return true  // ✅ 识别特殊标记
+  }
+
+  // ... 其他错误检查 ...
+
+  if (
+    errorMessage.includes('socket hang up') ||
+    // ... 其他错误消息 ...
+    errorMessage.includes('account concurrency limit exceeded') // ✅ 兼容错误消息
+  ) {
+    return true
+  }
+
+  // ...
+}
+```
+
+#### 修复文件 2：`src/utils/retryManager.js`
+
+```javascript
+isRetryableError(statusCode, error) {
+  // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
+  if (error && error.accountConcurrencyExceeded === true) {
+    return true  // ✅ 识别特殊标记
+  }
+
+  // ... 其他错误检查 ...
+
+  if (
+    errorMessage.includes('socket hang up') ||
+    // ... 其他错误消息 ...
+    errorMessage.toLowerCase().includes('account concurrency limit exceeded') // ✅ 兼容错误消息
+  ) {
+    return true
+  }
+
+  // ...
+}
+```
+
+### 修复后的行为
+
+#### 场景 1：30秒等待窗口内成功（推荐配置）
+
+**配置**：
+```bash
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=30000   # 等待30秒
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=1000  # 每1秒轮询
+```
+
+**流程**：
+1. 请求1占用账户A（1/1）
+2. 请求2尝试使用相同账户（粘性会话）
+3. **检测到并发满载，开始等待**
+4. 每1秒轮询检查并发是否释放
+5. **如果20秒内请求1完成** → 请求2成功使用账户A ✅
+6. **如果30秒后仍满载** → 删除粘性映射，切换到账户B ✅
+
+**预期日志**（30秒内成功）：
+```
+[请求2] 🎯 Using sticky session account: account-a for session abc
+[请求2] 🕒 Sticky concurrency wait: polling... (1/30)
+[请求2] 🕒 Sticky concurrency wait: polling... (2/30)
+[请求2] 🕒 Sticky concurrency wait succeeded: 0/1 after 2 poll(s) ✅
+[请求2] 📈 Account concurrency: Account A (1/1)
+[请求2] ✅ Stream request succeeded using account: account-a
+```
+
+**预期日志**（30秒超时切换）：
+```
+[请求2] 🎯 Using sticky session account: account-a for session abc
+[请求2] 🕒 Sticky concurrency wait: polling... (1/30)
+...
+[请求2] ⌛ Sticky account account-a still at limit (1/1) after 30000ms
+[请求2] 🔄 Deleted sticky session mapping for session abc
+[请求2] 🎯 Selected new account: account-b ✅
+[请求2] ✅ Stream request succeeded using account: account-b
+```
+
+#### 场景 2：等待功���禁用（立即切换）
+
+**配置**：
+```bash
+STICKY_CONCURRENCY_WAIT_ENABLED=false  # 禁用等待，立即切换
+```
+
+**预期日志**：
+```
+🎯 Using sticky session account: account-a
+⏸️ Sticky account concurrency 1/1, wait disabled -> fallback immediately
+🔄 Deleted sticky session mapping
+🎯 Selected new account: account-b ✅
+✅ Stream request succeeded using account: account-b
+```
+
+### 配置建议（修复后）
+
+#### 推荐配置（平衡性能和上下文连续性）
+
+```bash
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=30000   # 30秒（适合大部分场景）
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=1000
+```
+
+**适用场景**：
+- 大部分请求在30秒内完成
+- 希望保持粘性会话的上下文连续性
+- 可以接受30秒的最大等待延迟
+
+#### 低延迟配置（快速切换）
+
+```bash
+STICKY_CONCURRENCY_WAIT_ENABLED=true
+STICKY_CONCURRENCY_MAX_WAIT_MS=5000    # 5秒快速超时
+STICKY_CONCURRENCY_POLL_INTERVAL_MS=500
+```
+
+**适用场景**：
+- 请求通常很快完成（<5秒）
+- 对响应延迟敏感
+- 有足够的备用账号
+
+#### 立即切换配置（不等待）
+
+```bash
+STICKY_CONCURRENCY_WAIT_ENABLED=false
+```
+
+**适用场景**：
+- 不关心粘性会话上下文
+- 优先考虑响应速度
+- 多账号负载均衡
+
+### 验证测试
+
+#### 测试 1：等待机制验证
+
+**步骤**：
+1. 配置账户A并发限制为1
+2. 发送长时间请求1（持续20秒）
+3. 同时发送请求2（相同会话hash）
+4. **预期**：请求2等待约20秒后成功使用账户A
+
+**验证点**：
+- ✅ 日志显示 `🕒 Sticky concurrency wait succeeded`
+- ✅ 请求2使用相同账户A（粘性会话保持）
+- ✅ 无错误返回给用户
+
+#### 测试 2：超时切换验证
+
+**步骤**：
+1. 配置账户A并发限制为1
+2. 发送长时间请求1（持续40秒）
+3. 同时发送请求2（相同会话hash）
+4. **预期**：请求2等待30秒后切换到账户B
+
+**验证点**：
+- ✅ 日志显示 `⌛ still at limit after 30000ms`
+- ✅ 请求2切换到账户B
+- ✅ 用户等待30秒后正常得到响应
+
+---
+
 ## 🔗 相关文档
 
 - [并发调度机制详解](./concurrent-scheduling-mechanism.md)
 - [账户管理指南](../CLAUDE.md#账户管理)
 - [Redis 数据结构说明](../CLAUDE.md#redis-数据结构)
+- [流式重试实现](./STREAM_RETRY_IMPLEMENTATION.md)
 
 ---
 
@@ -839,6 +1063,7 @@ const concurrency = await client.zcard(`account_concurrency_zset:${accountId}`)
 3. **推荐配置**：个人账户 3，团队账户 5，企业账户 10
 4. **自动降级**：超限时自动切换到其他可用账户
 5. **防止泄漏**：10分钟自动过期 + 请求结束强制清理
+6. **粘性等待**：30秒等待窗口确保上下文连续性（可配置）
 
 ### 适用场景
 
@@ -863,6 +1088,6 @@ const concurrency = await client.zcard(`account_concurrency_zset:${accountId}`)
 
 ---
 
-**最后更新**：2025-10-10
+**最后更新**：2025-01-21（添加重试机制修复说明）
 **维护者**：Claude Relay Service Team
-**Git Commit**：待提交（feat: 为Claude Console账户添加并发限制功能）
+**重要修复**：2025-01-21 - 修复并发限制错误识别BUG

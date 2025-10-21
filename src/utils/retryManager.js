@@ -26,6 +26,13 @@ class RetryManager {
    * @returns {boolean}
    */
   isRetryableError(statusCode, error) {
+    // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
+    // 这是设计上的可重试错误，粘性会话机制会先等待（STICKY_CONCURRENCY_MAX_WAIT_MS）
+    // 如果等待后仍然超限，则应该切换账号
+    if (error && error.accountConcurrencyExceeded === true) {
+      return true
+    }
+
     // 5xx错误可重试
     if (this.RETRYABLE_STATUS_CODES.includes(statusCode)) {
       return true
@@ -44,7 +51,8 @@ class RetryManager {
         errorCode === 'ENOTFOUND' ||
         errorMessage.includes('socket hang up') ||
         errorMessage.includes('Connection reset') ||
-        errorMessage.toLowerCase().includes('eai_again')
+        errorMessage.toLowerCase().includes('eai_again') ||
+        errorMessage.toLowerCase().includes('account concurrency limit exceeded') // 🆕 账户并发超限
       ) {
         return true
       }

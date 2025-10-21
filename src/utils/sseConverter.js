@@ -162,6 +162,13 @@ function sendSSEError(res, error, statusCode = null) {
  * @returns {boolean} - 是否可以重试
  */
 function isStreamRetryableError(error) {
+  // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
+  // 这是设计上的可重试错误，粘性会话机制会先等待30秒（STICKY_CONCURRENCY_MAX_WAIT_MS）
+  // 如果等待后仍然超限，则应该切换账号
+  if (error.accountConcurrencyExceeded === true) {
+    return true
+  }
+
   // 网络错误可重试
   if (
     error.code === 'ECONNRESET' ||
@@ -217,7 +224,8 @@ function isStreamRetryableError(error) {
     errorMessage.includes('malformed json') ||
     errorMessage.includes('invalid claude api response') ||
     errorMessage.includes('too many active sessions') || // 🆕 会话过多错误（应切换账户）
-    errorMessage.includes('permission_error') // 🆕 权限错误（可能是账户限制）
+    errorMessage.includes('permission_error') || // 🆕 权限错误（可能是账户限制）
+    errorMessage.includes('account concurrency limit exceeded') // 🆕 账户并发超限（应切换账户）
   ) {
     return true
   }
