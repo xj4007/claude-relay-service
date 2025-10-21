@@ -120,6 +120,31 @@
         <i class="fas fa-lightbulb mr-2" />
         <span>提示：最多支持同时查询 30 个 API Keys。使用 Ctrl+Enter 快速查询。</span>
       </div>
+
+      <!-- 交易日志提示（仅单一模式显示） -->
+      <div
+        v-if="!multiKeyMode"
+        class="transaction-log-hint mt-3 rounded-lg border-2 border-blue-300 bg-gradient-to-r from-blue-50 to-sky-50 p-4 dark:border-blue-700 dark:from-blue-950/40 dark:to-sky-950/40"
+      >
+        <div class="flex items-start gap-3">
+          <div class="hint-icon">
+            <i class="fas fa-receipt text-lg text-blue-500 dark:text-blue-400 md:text-xl" />
+          </div>
+          <div class="flex-1">
+            <h4 class="mb-1 text-sm font-semibold text-gray-900 dark:text-gray-100 md:text-base">
+              <i class="fas fa-star mr-1 text-amber-500" />
+              详细消费日志
+            </h4>
+            <p class="text-xs leading-relaxed text-gray-700 dark:text-gray-300 md:text-sm">
+              点击上方
+              <strong class="font-semibold text-blue-600 dark:text-blue-400">"查询统计"</strong>
+              按钮后，页面最底部将展示详细的
+              <strong class="font-semibold text-blue-600 dark:text-blue-400">交易明细日志</strong
+              >，真正透明消费。如有疑问可以咨询客服，感谢各位大佬的支持哈！ 🙏
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -512,27 +537,44 @@ const hasValidInput = computed(() => {
   }
 }
 
+/* 交易日志提示横幅样式 */
+.transaction-log-hint {
+  box-shadow:
+    0 4px 6px -1px rgba(59, 130, 246, 0.1),
+    0 2px 4px -1px rgba(59, 130, 246, 0.06);
+  transition: all 0.3s ease;
+}
+
+.transaction-log-hint:hover {
+  box-shadow:
+    0 10px 15px -3px rgba(59, 130, 246, 0.15),
+    0 4px 6px -2px rgba(59, 130, 246, 0.08);
+  transform: translateY(-1px);
+}
+
+.transaction-log-hint .hint-icon {
+  flex-shrink: 0;
+}
+
+.transaction-log-hint strong {
+  font-weight: 600;
+}
+
 @media (max-width: 480px) {
-  .api-input-wide-card {
-    padding: 1rem;
+  .transaction-log-hint {
+    padding: 0.75rem;
   }
 
-  .wide-card-title h2 {
-    font-size: 1.25rem;
+  .transaction-log-hint h4 {
+    font-size: 0.75rem;
   }
 
-  .wide-card-title p {
-    font-size: 0.8rem;
+  .transaction-log-hint p {
+    font-size: 0.7rem;
   }
 
-  .wide-card-input {
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
-  .btn-query {
-    padding: 10px 16px;
-    font-size: 14px;
+  .transaction-log-hint .hint-icon i {
+    font-size: 1rem;
   }
 }
 </style>
