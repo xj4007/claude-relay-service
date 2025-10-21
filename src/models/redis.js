@@ -2005,12 +2005,12 @@ redisClient.addTransactionLog = async function (keyId, logData) {
     // 添加日志条目（使用时间戳作为score）
     pipeline.zadd(logKey, timestamp, logEntry)
 
-    // 删除24小时前的旧数据
-    const oneDayAgo = timestamp - 24 * 60 * 60 * 1000
-    pipeline.zremrangebyscore(logKey, '-inf', oneDayAgo)
+    // 删除3小时前的旧数据
+    const threeHoursAgo = timestamp - 3 * 60 * 60 * 1000
+    pipeline.zremrangebyscore(logKey, '-inf', threeHoursAgo)
 
-    // 设置key过期时间为25小时（留一点余量）
-    pipeline.expire(logKey, 25 * 60 * 60)
+    // 设置key过期时间为4小时（留一点余量）
+    pipeline.expire(logKey, 4 * 60 * 60)
 
     await pipeline.exec()
   } catch (error) {
@@ -2029,9 +2029,9 @@ redisClient.getTransactionLogs = async function (
     const logKey = `transaction_log:${keyId}`
     const client = this.getClientSafe()
 
-    // 如果没有指定时间范围，默认查询最近24小时
+    // 如果没有指定时间范围，默认查询最近3小时
     const now = Date.now()
-    const start = startTime || now - 24 * 60 * 60 * 1000
+    const start = startTime || now - 3 * 60 * 60 * 1000
     const end = endTime || now
 
     // 计算总数

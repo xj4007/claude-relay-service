@@ -7,7 +7,7 @@
         交易明细
       </h2>
       <p class="text-base text-gray-600 dark:text-gray-400">
-        查看最近 24 小时的 API 调用记录（仅保留 24 小时数据）
+        查看最近 3 小时的 API 调用记录（仅保留 3 小时数据）
       </p>
     </div>
 
@@ -24,9 +24,9 @@
           @change="handleRangeChange"
         >
           <option value="1h">最近 1 小时</option>
+          <option value="3h">最近 3 小时</option>
           <option value="6h">最近 6 小时</option>
           <option value="12h">最近 12 小时</option>
-          <option value="24h">最近 24 小时</option>
           <option value="custom">自定义</option>
         </select>
       </div>
@@ -212,7 +212,7 @@
         <div class="stat-item">
           <i class="fas fa-clock mr-2 text-purple-500" />
           <span class="text-sm text-gray-600 dark:text-gray-400">数据保留:</span>
-          <span class="ml-2 font-semibold text-gray-900 dark:text-gray-200">24 小时</span>
+          <span class="ml-2 font-semibold text-gray-900 dark:text-gray-200">3 小时</span>
         </div>
       </div>
     </div>
@@ -279,8 +279,8 @@ const visiblePages = computed(() => {
   return pages.filter((p) => p !== '...')
 })
 
-// 日期范围选择
-const selectedRange = ref('24h')
+// 日期范围选择（默认改为3小时）
+const selectedRange = ref('3h')
 const customStartDate = ref('')
 const customEndDate = ref('')
 
@@ -316,6 +316,9 @@ function handleRangeChange() {
     case '1h':
       startTime = now - 60 * 60 * 1000
       break
+    case '3h':
+      startTime = now - 3 * 60 * 60 * 1000
+      break
     case '6h':
       startTime = now - 6 * 60 * 60 * 1000
       break
@@ -324,7 +327,7 @@ function handleRangeChange() {
       break
     case '24h':
     default:
-      startTime = now - 24 * 60 * 60 * 1000
+      startTime = now - 3 * 60 * 60 * 1000 // 默认改为3小时
       break
   }
 
