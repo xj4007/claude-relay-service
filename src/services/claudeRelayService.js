@@ -303,6 +303,24 @@ class ClaudeRelayService {
             logger.info(`🚫 529 error handling is disabled, skipping account overload marking`)
           }
         }
+        // 🆕 检查是否为520状态码（Claude官方过载错误，与529同等对待）
+        else if (response.statusCode === 520) {
+          logger.warn(`🚫 Overload error (520) detected for account ${accountId}`)
+
+          // 检查是否启用了520错误处理
+          if (config.claude.overloadHandling.enabled > 0) {
+            try {
+              await claudeAccountService.markAccountOverloaded(accountId)
+              logger.info(
+                `🚫 Account ${accountId} marked as overloaded for ${config.claude.overloadHandling.enabled} minutes`
+              )
+            } catch (overloadError) {
+              logger.error(`❌ Failed to mark account as overloaded: ${accountId}`, overloadError)
+            }
+          } else {
+            logger.info(`🚫 520 error handling is disabled, skipping account overload marking`)
+          }
+        }
         // 检查是否为5xx状态码
         else if (response.statusCode >= 500 && response.statusCode < 600) {
           logger.warn(`🔥 Server error (${response.statusCode}) detected for account ${accountId}`)
@@ -1414,6 +1432,28 @@ class ClaudeRelayService {
               } else {
                 logger.info(
                   `🚫 [Stream] 529 error handling is disabled, skipping account overload marking`
+                )
+              }
+            } else if (res.statusCode === 520) {
+              // 🆕 520错误处理：Claude官方过载错误，与529同等对待
+              logger.warn(`🚫 [Stream] Overload error (520) detected for account ${accountId}`)
+
+              // 检查是否启用了520错误处理
+              if (config.claude.overloadHandling.enabled > 0) {
+                try {
+                  await claudeAccountService.markAccountOverloaded(accountId)
+                  logger.info(
+                    `🚫 [Stream] Account ${accountId} marked as overloaded for ${config.claude.overloadHandling.enabled} minutes`
+                  )
+                } catch (overloadError) {
+                  logger.error(
+                    `❌ [Stream] Failed to mark account as overloaded: ${accountId}`,
+                    overloadError
+                  )
+                }
+              } else {
+                logger.info(
+                  `🚫 [Stream] 520 error handling is disabled, skipping account overload marking`
                 )
               }
             } else if (res.statusCode >= 500 && res.statusCode < 600) {

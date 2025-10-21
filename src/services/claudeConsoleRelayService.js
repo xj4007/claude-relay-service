@@ -554,6 +554,17 @@ class ClaudeConsoleRelayService {
           body: JSON.stringify(sanitizedError),
           accountId
         }
+      } else if (response.status === 520) {
+        // 🆕 520错误处理：Claude官方过载错误，与529同等对待
+        await claudeConsoleAccountService.markAccountOverloaded(accountId)
+        // 返回脱敏后的错误信息
+        const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
+        return {
+          statusCode: response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sanitizedError),
+          accountId
+        }
       } else if (response.status === 403) {
         await this._handleVendorConcurrencyLimit(accountId, account, response.data)
         const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
@@ -1324,6 +1335,9 @@ class ClaudeConsoleRelayService {
                 logger.error('❌ Failed to check quota after 429 error:', err)
               })
             } else if (error.response.status === 529) {
+              claudeConsoleAccountService.markAccountOverloaded(accountId)
+            } else if (error.response.status === 520) {
+              // 🆕 520错误处理：Claude官方过载错误，与529同等对待
               claudeConsoleAccountService.markAccountOverloaded(accountId)
             } else if (error.response.status === 400) {
               const { message: promptErrorMessage } = this._extractErrorDetails(error.response.data)

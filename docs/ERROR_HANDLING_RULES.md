@@ -39,6 +39,7 @@
 | **403** | 权限不足/账户被封 | `markAccountBlocked()` | 仅手动恢复 |
 | **403（并发超限）** | 供应商并发限制（Too many active sessions） | `markAccountTempError()` | 6分钟后自动恢复 |
 | **429** | 请求频率限制 | `markAccountRateLimited()` | 自动恢复（根据 rate-limit-reset 时间）|
+| **520** | Claude官方过载 | `markAccountOverloaded()` | 10分钟后自动恢复 |
 | **529** | 服务过载 | `markAccountOverloaded()` | 10分钟后自动恢复 |
 
 ### 2️⃣ 累积判断错误（连续触发）
@@ -115,7 +116,7 @@
 | `active` | 正常可用 | ✅ 是 | - |
 | `temp_error` | 临时错误（连续5xx） | ❌ 否 | ✅ 6分钟 |
 | `rate_limited` | 请求频率限制 | ❌ 否 | ✅ 根据reset时间 |
-| `overloaded` | 服务过载 (529) | ❌ 否 | ✅ 10分钟 |
+| `overloaded` | 服务过载 (520/529) | ❌ 否 | ✅ 10分钟 |
 | `unauthorized` | 认证失败 (401) | ❌ 否 | ⚠️ 手动或刷新token |
 | `blocked` | 账户被封 (403) | ❌ 否 | ⚠️ 仅手动恢复 |
 | `quota_exceeded` | 配额超限 | ❌ 否 | ⚠️ 次日UTC 0点自动重置 |
