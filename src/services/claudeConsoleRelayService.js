@@ -418,17 +418,17 @@ class ClaudeConsoleRelayService {
           modifiedRequestBody.model
         )
 
-        // 标准请求头：合并 Claude Code headers
+        // 🔒 完全使用统一的请求头，只添加必需的认证信息
         requestHeaders = {
+          ...claudeCodeHeaders, // ✅ 使用统一的 Claude Code headers
           'Content-Type': 'application/json',
           'anthropic-version': '2023-06-01',
-          'User-Agent': userAgent,
-          ...claudeCodeHeaders, // ✅ 添加完整的 Claude Code headers
-          ...filteredHeaders // 保留客户端的其他 headers
+          Authorization: `Bearer ${account.apiKey}`
         }
 
         // 根据 API Key 格式选择认证方式
         if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+          delete requestHeaders['Authorization']
           requestHeaders['x-api-key'] = account.apiKey
         } else {
           requestHeaders['Authorization'] = `Bearer ${account.apiKey}`
@@ -584,7 +584,12 @@ class ClaudeConsoleRelayService {
           // 不记录为服务器错误，因为上游可能稍后成功
         } else {
           // 其他5xx错误或客户端未断开时的504，正常记录错误
-          await this._handleServerError(accountId, response.status, response.data, requestBody.model)
+          await this._handleServerError(
+            accountId,
+            response.status,
+            response.data,
+            requestBody.model
+          )
         }
 
         // 返回脱敏后的错误信息
@@ -597,8 +602,16 @@ class ClaudeConsoleRelayService {
         }
       } else if (response.status >= 400) {
         const { message: extractedMessage } = this._extractErrorDetails(response.data)
-        if (response.status === 400 && this._isPromptTooLongError(extractedMessage, response.data)) {
-          await this._handleServerError(accountId, response.status, response.data, requestBody.model)
+        if (
+          response.status === 400 &&
+          this._isPromptTooLongError(extractedMessage, response.data)
+        ) {
+          await this._handleServerError(
+            accountId,
+            response.status,
+            response.data,
+            requestBody.model
+          )
         }
 
         // 返回脱敏后的错误信息
@@ -889,17 +902,17 @@ class ClaudeConsoleRelayService {
         body.model
       )
 
-      // 标准请求头：合并 Claude Code headers
+      // 🔒 完全使用统一的请求头，只添加必需的认证信息
       requestHeaders = {
+        ...claudeCodeHeaders, // ✅ 使用统一的 Claude Code headers
         'Content-Type': 'application/json',
         'anthropic-version': '2023-06-01',
-        'User-Agent': userAgent,
-        ...claudeCodeHeaders, // ✅ 添加完整的 Claude Code headers
-        ...filteredHeaders // 保留客户端的其他 headers
+        Authorization: `Bearer ${account.apiKey}`
       }
 
       // 根据 API Key 格式选择认证方式
       if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+        delete requestHeaders['Authorization']
         requestHeaders['x-api-key'] = account.apiKey
       } else {
         requestHeaders['Authorization'] = `Bearer ${account.apiKey}`
@@ -1233,7 +1246,9 @@ class ClaudeConsoleRelayService {
               if (timeoutMonitor && !monitorStopped) {
                 timeoutMonitor.stop()
                 monitorStopped = true
-                logger.debug(`⏱️ Stream completed successfully, monitor stopped | Acc: ${account?.name}`)
+                logger.debug(
+                  `⏱️ Stream completed successfully, monitor stopped | Acc: ${account?.name}`
+                )
               }
 
               // 处理缓冲区中剩余的数据
@@ -1490,8 +1505,7 @@ class ClaudeConsoleRelayService {
       // 🎯 特殊处理：检查是否为 model_not_found 错误
       let isModelNotFound = false
       if (errorData) {
-        const errorStr =
-          typeof errorData === 'string' ? errorData : JSON.stringify(errorData)
+        const errorStr = typeof errorData === 'string' ? errorData : JSON.stringify(errorData)
         isModelNotFound =
           errorStr.includes('model_not_found') ||
           errorStr.includes('无可用渠道') ||
@@ -1689,7 +1703,10 @@ class ClaudeConsoleRelayService {
         try {
           payload = JSON.parse(trimmed)
         } catch (error) {
-          logger.debug('⚠️ Failed to parse error payload as JSON for vendor concurrency detection:', error.message)
+          logger.debug(
+            '⚠️ Failed to parse error payload as JSON for vendor concurrency detection:',
+            error.message
+          )
         }
       }
     }
@@ -1718,7 +1735,8 @@ class ClaudeConsoleRelayService {
       const lowerMessage = (message || '').toLowerCase()
       const rawLower = (raw || '').toLowerCase()
       const accountName = (account?.name || '').toLowerCase()
-      const is88CodeVendor = /88code/.test(accountName) || /88code/.test(lowerMessage) || /88code/.test(rawLower)
+      const is88CodeVendor =
+        /88code/.test(accountName) || /88code/.test(lowerMessage) || /88code/.test(rawLower)
       const hasConcurrencyHint =
         lowerMessage.includes('too many active sessions') ||
         lowerMessage.includes('active sessions detected') ||
@@ -1768,19 +1786,14 @@ class ClaudeConsoleRelayService {
         `🚫 Vendor concurrency limit detected for account ${accountId} (${account?.name || 'unknown'}) - paused for ${recoveryMinutes} minutes`
       )
     } catch (error) {
-      logger.error(
-        `❌ Failed to handle vendor concurrency limit for account ${accountId}:`,
-        error
-      )
+      logger.error(`❌ Failed to handle vendor concurrency limit for account ${accountId}:`, error)
     }
   }
 
   // 🔥 流式超时处理方法
   async _handleStreamTimeout(accountId, timeoutType, duration) {
     try {
-      logger.error(
-        `⏱️ Stream timeout for account ${accountId}: ${timeoutType} after ${duration}ms`
-      )
+      logger.error(`⏱️ Stream timeout for account ${accountId}: ${timeoutType} after ${duration}ms`)
 
       // 记录超时事件到Redis
       await claudeConsoleAccountService.recordStreamTimeout(accountId, timeoutType, duration)
@@ -1790,9 +1803,7 @@ class ClaudeConsoleRelayService {
 
       const threshold = 2 // 2次超时触发阈值（比5xx错误更严格）
 
-      logger.warn(
-        `⏱️ Stream timeout count for account ${accountId}: ${timeoutCount}/${threshold}`
-      )
+      logger.warn(`⏱️ Stream timeout count for account ${accountId}: ${timeoutCount}/${threshold}`)
 
       // 如果连续超时超过阈值，标记为 temp_error
       if (timeoutCount >= threshold) {

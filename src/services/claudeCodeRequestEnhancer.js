@@ -250,10 +250,7 @@ class ClaudeCodeRequestEnhancer {
   ensureClaudeCodeSystem(requestBody) {
     if (!requestBody.system) {
       // 创建完整的system数组（使用 contents.js 的完整 Claude Code 指令）
-      requestBody.system = [
-        this.claudeCodeSystemBase,
-        this.claudeCodeDetailedInstructions
-      ]
+      requestBody.system = [this.claudeCodeSystemBase, this.claudeCodeDetailedInstructions]
       logger.debug('✅ Added complete Claude Code system parameters from contents.js')
     } else if (Array.isArray(requestBody.system)) {
       // 检查是否包含Claude Code标识
@@ -342,18 +339,20 @@ class ClaudeCodeRequestEnhancer {
 
   /**
    * 根据模型类型获取正确的anthropic-beta header值
+   * haiku: interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14
+   * sonnet/opus: claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14
    */
   getBetaHeader(model) {
     const modelType = this.detectModelType(model)
 
     switch (modelType) {
       case 'haiku':
-        return 'fine-grained-tool-streaming-2025-05-14'
+        return 'interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14'
       case 'sonnet':
       case 'opus':
         return 'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14'
       default:
-        return 'fine-grained-tool-streaming-2025-05-14'
+        return 'interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14'
     }
   }
 }

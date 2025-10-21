@@ -545,7 +545,7 @@ class ClaudeRelayService {
     if (!isRealClaudeCode) {
       const claudeCodePrompt = {
         type: 'text',
-        text: this.claudeCodeSystemPrompt,
+        text: this.claudeCodeSystemPrompt
         // cache_control: {
         //   type: 'ephemeral'
         // }
@@ -945,25 +945,22 @@ class ClaudeRelayService {
     // 判断是否是真实的 Claude Code 请求
     const isRealClaudeCode = this.isRealClaudeCodeRequest(body)
 
-    // 如果不是真实的 Claude Code 请求，需要使用从账户获取的 Claude Code headers
-    const finalHeaders = { ...filteredHeaders }
+    // 🔒 统一请求头策略：无论是否真实 Claude Code，都使用统一的请求头
+    const finalHeaders = {}
 
-    if (!isRealClaudeCode) {
-      // 获取该账号存储的 Claude Code headers，传入 model 参数以动态设置 User-Agent
-      const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
-        accountId,
-        account,
-        body.model
-      )
+    // 获取该账号的统一 Claude Code headers
+    const claudeCodeHeaders = await claudeCodeHeadersService.getAccountHeaders(
+      accountId,
+      account,
+      body.model
+    )
 
-      // 只添加客户端没有提供的 headers
-      Object.keys(claudeCodeHeaders).forEach((key) => {
-        const lowerKey = key.toLowerCase()
-        if (!finalHeaders[key] && !finalHeaders[lowerKey]) {
-          finalHeaders[key] = claudeCodeHeaders[key]
-        }
-      })
-    }
+    // 使用统一的 Claude Code headers（完全覆盖）
+    Object.keys(claudeCodeHeaders).forEach((key) => {
+      finalHeaders[key] = claudeCodeHeaders[key]
+    })
+
+    logger.info(`🔒 Using unified Claude Code headers for account ${accountId}`)
 
     return new Promise((resolve, reject) => {
       // 支持自定义路径（如 count_tokens）
@@ -1512,9 +1509,7 @@ class ClaudeRelayService {
 
               // 发送过滤后的错误事件
               responseStream.write('event: error\n')
-              responseStream.write(
-                `data: ${JSON.stringify(filteredError)}\n\n`
-              )
+              responseStream.write(`data: ${JSON.stringify(filteredError)}\n\n`)
               responseStream.end()
             }
             reject(new Error(`Claude API error: ${res.statusCode}`))

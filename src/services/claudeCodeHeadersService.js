@@ -8,7 +8,9 @@ const logger = require('../utils/logger')
 
 class ClaudeCodeHeadersService {
   constructor() {
-    this.defaultHeaders = {
+    // 🔒 统一请求头配置 - 所有请求都使用这个固定配置，防止上游检测多账号
+    // 注意：anthropic-beta 不在这里设置，需要根据模型动态获取
+    this.unifiedHeaders = {
       connection: 'keep-alive',
       accept: 'application/json',
       'x-stainless-retry-count': '0',
@@ -21,14 +23,15 @@ class ClaudeCodeHeadersService {
       'x-stainless-runtime-version': 'v20.19.1',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
-      'user-agent': 'claude-cli/1.0.119 (external, cli)',
+      'user-agent': 'claude-cli/2.0.19 (external, cli)',
       'accept-language': '*',
       'sec-fetch-mode': 'cors',
       'accept-encoding': 'br, gzip, deflate',
-      'anthropic-beta':
-        'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
       'x-stainless-helper-method': 'stream'
     }
+
+    // 保留默认配置作为备用（向后兼容）
+    this.defaultHeaders = { ...this.unifiedHeaders }
 
     // 特殊供应商配置 - 在这里统一配置所有需要特殊处理的供应商
     this.specialVendors = {
@@ -152,23 +155,13 @@ class ClaudeCodeHeadersService {
 
   /**
    * 根据模型获取对应的 User-Agent
+   * 🔒 现在统一返回固定的 User-Agent，防止上游检测多账号
    * @param {string} model - 模型名称
    * @returns {string} User-Agent 字符串
    */
   getUserAgentForModel(model) {
-    if (!model || typeof model !== 'string') {
-      return 'claude-cli/2.0.1 (external, cli)' // 默认使用最新版本
-    }
-
-    const modelLower = model.toLowerCase()
-
-    // 精确匹配 Sonnet 4 的特定日期版本
-    if (modelLower.includes('claude-sonnet-4-20250514')) {
-      return 'claude-cli/1.0.119 (external, cli)'
-    }
-
-    // 所有其他情况（Sonnet 4.5+、Sonnet 5+、Opus、Haiku 等）使用最新版本
-    return 'claude-cli/2.0.1 (external, cli)'
+    // 🔒 统一返回固定的 User-Agent
+    return this.unifiedHeaders['user-agent']
   }
 
   /**
@@ -245,41 +238,26 @@ class ClaudeCodeHeadersService {
 
   /**
    * 获取特殊供应商专用请求头（通用方法）
+   * 🔒 现在统一返回固定的请求头配置，防止上游检测多账号
    * @param {string} accessToken - 访问令牌
-   * @param {string} model - 模型名称（用于动态设置 User-Agent 和 anthropic-beta）
+   * @param {string} model - 模型名称（用于动态设置 anthropic-beta）
    */
   getSpecialVendorHeaders(accessToken, model) {
     // 根据模型动态获取正确的 beta header
     const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
     const betaHeader = model
       ? claudeCodeRequestEnhancer.getBetaHeader(model)
-      : 'fine-grained-tool-streaming-2025-05-14'
+      : this.unifiedHeaders['anthropic-beta']
 
+    // 🔒 使用统一的请求头配置
     const headers = {
-      // 认证
+      ...this.unifiedHeaders,
+      // 认证和内容类型需要动态设置
       Authorization: `Bearer ${accessToken}`,
-      // 基础 headers
       'content-type': 'application/json',
       'anthropic-version': '2023-06-01',
-      'User-Agent': model ? this.getUserAgentForModel(model) : 'claude-cli/2.0.1 (external, cli)',
-      Accept: 'application/json',
-      Connection: 'keep-alive',
-      // Claude Code 特有 headers
-      'x-app': 'cli',
-      'anthropic-dangerous-direct-browser-access': 'true',
-      'anthropic-beta': betaHeader, // 根据模型类型动态设置
-      'x-stainless-helper-method': 'stream',
-      'accept-language': '*',
-      'sec-fetch-mode': 'cors',
-      // X-Stainless 系列
-      'x-stainless-retry-count': '0',
-      'x-stainless-timeout': '600',
-      'x-stainless-lang': 'js',
-      'x-stainless-package-version': '0.60.0',
-      'x-stainless-os': 'Windows',
-      'x-stainless-arch': 'x64',
-      'x-stainless-runtime': 'node',
-      'x-stainless-runtime-version': 'v20.19.1'
+      // 根据模型动态设置 beta header
+      'anthropic-beta': betaHeader
     }
 
     return headers
@@ -287,9 +265,10 @@ class ClaudeCodeHeadersService {
 
   /**
    * 获取账号的 Claude Code headers
+   * 🔒 现在统一返回固定的请求头配置，防止上游检测多账号
    * @param {string} accountId - 账户ID
    * @param {object} account - 账户对象
-   * @param {string} model - 请求的模型名称（用于动态设置 User-Agent）
+   * @param {string} model - 请求的模型名称（用于动态设置 anthropic-beta）
    */
   async getAccountHeaders(accountId, account = null, model = null) {
     try {
@@ -305,39 +284,32 @@ class ClaudeCodeHeadersService {
         }
       }
 
-      const key = `claude_code_headers:${accountId}`
-      const data = await redis.getClient().get(key)
+      // 🔒 统一返回固定的请求头配置
+      const headers = { ...this.unifiedHeaders }
 
-      let headers
-      if (data) {
-        const parsed = JSON.parse(data)
-        headers = { ...parsed.headers }
-        logger.debug(
-          `📋 Retrieved Claude Code headers for account ${accountId}, version: ${parsed.version}`
-        )
-      } else {
-        // 使用默认 headers
-        headers = { ...this.defaultHeaders }
-        logger.debug(`📋 Using default Claude Code headers for account ${accountId}`)
-      }
-
-      // 如果提供了模型参数，根据模型动态设置 User-Agent
+      // 根据模型动态设置 anthropic-beta
       if (model) {
-        const userAgent = this.getUserAgentForModel(model)
-        headers['user-agent'] = userAgent
-        logger.debug(`🔄 Set User-Agent for model ${model}: ${userAgent}`)
+        const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
+        headers['anthropic-beta'] = claudeCodeRequestEnhancer.getBetaHeader(model)
+        logger.debug(`📋 Set anthropic-beta for model ${model}: ${headers['anthropic-beta']}`)
       }
+
+      logger.debug(`📋 Using unified Claude Code headers for account ${accountId}`)
 
       return headers
     } catch (error) {
       logger.error(`❌ Failed to get Claude Code headers for account ${accountId}:`, error)
-      const headers = { ...this.defaultHeaders }
-
-      // 即使出错，也尝试根据模型设置正确的 User-Agent
+      // 🔒 出错时也返回统一配置
+      const headers = { ...this.unifiedHeaders }
+      // 即使出错，也尝试根据模型设置 beta header
       if (model) {
-        headers['user-agent'] = this.getUserAgentForModel(model)
+        try {
+          const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
+          headers['anthropic-beta'] = claudeCodeRequestEnhancer.getBetaHeader(model)
+        } catch (e) {
+          logger.warn(`⚠️ Failed to set anthropic-beta for model ${model}`)
+        }
       }
-
       return headers
     }
   }
