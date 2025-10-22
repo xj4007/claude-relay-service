@@ -208,12 +208,12 @@ router.post('/api/user-stats', async (req, res) => {
     try {
       const client = redis.getClientSafe()
 
-      // 获取所有模型统计（包括日度和月度，用于计算总费用）
-      const allModelKeys = await client.keys(`usage:${keyId}:model:*:*:*`)
+      // 获取所有月度模型统计（用于计算总费用）
+      const allModelKeys = await client.keys(`usage:${keyId}:model:monthly:*:*`)
       const modelUsageMap = new Map()
 
       for (const key of allModelKeys) {
-        const modelMatch = key.match(/usage:.+:model:(?:daily|monthly):(.+):\d{4}-\d{2}(?:-\d{2})?$/)
+        const modelMatch = key.match(/usage:.+:model:monthly:(.+):\d{4}-\d{2}$/)
         if (!modelMatch) {
           continue
         }
@@ -699,9 +699,7 @@ router.post('/api/batch-model-stats', async (req, res) => {
         const pattern =
           period === 'daily'
             ? `usage:${apiId}:model:daily:*:${today}`
-            : period === 'monthly'
-              ? `usage:${apiId}:model:monthly:*:${currentMonth}`
-              : `usage:${apiId}:model:*:*:*` // 'total' 模式：查询所有历史数据
+            : `usage:${apiId}:model:monthly:*:${period === 'monthly' ? currentMonth : '*'}` // monthly 或 total 都查 monthly 数据
 
         const keys = await client.keys(pattern)
 
@@ -709,9 +707,7 @@ router.post('/api/batch-model-stats', async (req, res) => {
           const match = key.match(
             period === 'daily'
               ? /usage:.+:model:daily:(.+):\d{4}-\d{2}-\d{2}$/
-              : period === 'monthly'
-                ? /usage:.+:model:monthly:(.+):\d{4}-\d{2}$/
-                : /usage:.+:model:(?:daily|monthly):(.+):\d{4}-\d{2}(?:-\d{2})?$/ // 'total' 模式：匹配所有日期格式
+              : /usage:.+:model:monthly:(.+):\d{4}-\d{2}$/ // monthly 和 total 都使用 monthly 匹配
           )
 
           if (!match) {
@@ -877,20 +873,16 @@ router.post('/api/user-model-stats', async (req, res) => {
     const pattern =
       period === 'daily'
         ? `usage:${keyId}:model:daily:*:${today}`
-        : period === 'monthly'
-          ? `usage:${keyId}:model:monthly:*:${currentMonth}`
-          : `usage:${keyId}:model:*:*:*` // 'total' 模式：查询所有历史数据
+        : `usage:${keyId}:model:monthly:*:${period === 'monthly' ? currentMonth : '*'}` // monthly 或 total 都查 monthly 数据
 
     const keys = await client.keys(pattern)
-    const modelStatsMap = new Map() // 使用 Map 来聚合相同模型的数据
+    const modelStatsMap = new Map() // 使用 Map 来聚合相同模型的数据（total 模式需要聚合多个月份）
 
     for (const key of keys) {
       const match = key.match(
         period === 'daily'
           ? /usage:.+:model:daily:(.+):\d{4}-\d{2}-\d{2}$/
-          : period === 'monthly'
-            ? /usage:.+:model:monthly:(.+):\d{4}-\d{2}$/
-            : /usage:.+:model:(?:daily|monthly):(.+):\d{4}-\d{2}(?:-\d{2})?$/ // 'total' 模式：匹配所有日期格式
+          : /usage:.+:model:monthly:(.+):\d{4}-\d{2}$/ // monthly 和 total 都使用 monthly 匹配
       )
 
       if (!match) {
@@ -910,37 +902,22 @@ router.post('/api/user-model-stats', async (req, res) => {
 
         const costData = CostCalculator.calculateCost(usage, model)
 
-        // 对于 'total' 模式，聚合相同模型的数据
-        if (period === 'total') {
-          if (modelStatsMap.has(model)) {
-            const existing = modelStatsMap.get(model)
-            existing.requests += parseInt(data.requests) || 0
-            existing.inputTokens += usage.input_tokens
-            existing.outputTokens += usage.output_tokens
-            existing.cacheCreateTokens += usage.cache_creation_input_tokens
-            existing.cacheReadTokens += usage.cache_read_input_tokens
-            existing.allTokens += parseInt(data.allTokens) || 0
-            existing.costs.input_tokens += costData.costs.input_tokens
-            existing.costs.output_tokens += costData.costs.output_tokens
-            existing.costs.cache_creation_input_tokens += costData.costs.cache_creation_input_tokens
-            existing.costs.cache_read_input_tokens += costData.costs.cache_read_input_tokens
-            existing.costs.total += costData.costs.total
-          } else {
-            modelStatsMap.set(model, {
-              model,
-              requests: parseInt(data.requests) || 0,
-              inputTokens: usage.input_tokens,
-              outputTokens: usage.output_tokens,
-              cacheCreateTokens: usage.cache_creation_input_tokens,
-              cacheReadTokens: usage.cache_read_input_tokens,
-              allTokens: parseInt(data.allTokens) || 0,
-              costs: costData.costs,
-              formatted: costData.formatted,
-              pricing: costData.pricing
-            })
-          }
+        // 对于 'total' 模式，需要聚合多个月份的数据
+        if (period === 'total' && modelStatsMap.has(model)) {
+          const existing = modelStatsMap.get(model)
+          existing.requests += parseInt(data.requests) || 0
+          existing.inputTokens += usage.input_tokens
+          existing.outputTokens += usage.output_tokens
+          existing.cacheCreateTokens += usage.cache_creation_input_tokens
+          existing.cacheReadTokens += usage.cache_read_input_tokens
+          existing.allTokens += parseInt(data.allTokens) || 0
+          existing.costs.input_tokens += costData.costs.input_tokens
+          existing.costs.output_tokens += costData.costs.output_tokens
+          existing.costs.cache_creation_input_tokens += costData.costs.cache_creation_input_tokens
+          existing.costs.cache_read_input_tokens += costData.costs.cache_read_input_tokens
+          existing.costs.total += costData.costs.total
         } else {
-          // 对于 'daily' 和 'monthly' 模式，直接添加
+          // 对于 'daily' 和 'monthly' 模式，或 'total' 模式的新模型，直接设置
           modelStatsMap.set(model, {
             model,
             requests: parseInt(data.requests) || 0,
