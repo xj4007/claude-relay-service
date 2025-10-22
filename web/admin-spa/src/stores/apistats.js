@@ -10,9 +10,10 @@ export const useApiStatsStore = defineStore('apistats', () => {
   const modelStatsLoading = ref(false)
   const oemLoading = ref(true)
   const error = ref('')
-  const statsPeriod = ref('daily')
+  const statsPeriod = ref('total')
   const statsData = ref(null)
   const modelStats = ref([])
+  const totalStats = ref(null)
   const dailyStats = ref(null)
   const monthlyStats = ref(null)
   const oemSettings = ref({
@@ -59,7 +60,9 @@ export const useApiStatsStore = defineStore('apistats', () => {
 
     // 聚合模式下使用聚合数据
     if (multiKeyMode.value && aggregatedStats.value) {
-      if (statsPeriod.value === 'daily') {
+      if (statsPeriod.value === 'total') {
+        return aggregatedStats.value.usage || defaultData
+      } else if (statsPeriod.value === 'daily') {
         return aggregatedStats.value.dailyUsage || defaultData
       } else {
         return aggregatedStats.value.monthlyUsage || defaultData
@@ -67,7 +70,9 @@ export const useApiStatsStore = defineStore('apistats', () => {
     }
 
     // 单个 Key 模式下使用原有逻辑
-    if (statsPeriod.value === 'daily') {
+    if (statsPeriod.value === 'total') {
+      return totalStats.value || defaultData
+    } else if (statsPeriod.value === 'daily') {
       return dailyStats.value || defaultData
     } else {
       return monthlyStats.value || defaultData
@@ -171,8 +176,12 @@ export const useApiStatsStore = defineStore('apistats', () => {
   async function loadAllPeriodStats() {
     if (!apiId.value) return
 
-    // 并行加载今日和本月的数据
-    await Promise.all([loadPeriodStats('daily'), loadPeriodStats('monthly')])
+    // 并行加载总计、今日和本月的数据
+    await Promise.all([
+      loadPeriodStats('total'),
+      loadPeriodStats('daily'),
+      loadPeriodStats('monthly')
+    ])
 
     // 加载当前选择时间段的模型统计
     await loadModelStats(statsPeriod.value)
@@ -209,8 +218,10 @@ export const useApiStatsStore = defineStore('apistats', () => {
 
         summary.formattedCost = formatCost(summary.cost)
 
-        // 存储到对应的时间段数据
-        if (period === 'daily') {
+        // ���储到对应的时间段数据
+        if (period === 'total') {
+          totalStats.value = summary
+        } else if (period === 'daily') {
           dailyStats.value = summary
         } else {
           monthlyStats.value = summary
@@ -261,6 +272,7 @@ export const useApiStatsStore = defineStore('apistats', () => {
 
     // 如果对应时间段的数据还没有加载，则加载它
     if (
+      (period === 'total' && !totalStats.value) ||
       (period === 'daily' && !dailyStats.value) ||
       (period === 'monthly' && !monthlyStats.value)
     ) {
@@ -410,6 +422,7 @@ export const useApiStatsStore = defineStore('apistats', () => {
         statsData.value = batchResult.data.aggregated // 兼容现有组件
 
         // 设置聚合模式下的日期统计数据，以保证现有组件的兼容性
+        totalStats.value = batchResult.data.aggregated.usage || null
         dailyStats.value = batchResult.data.aggregated.dailyUsage || null
         monthlyStats.value = batchResult.data.aggregated.monthlyUsage || null
 
@@ -552,10 +565,11 @@ export const useApiStatsStore = defineStore('apistats', () => {
   function clearData() {
     statsData.value = null
     modelStats.value = []
+    totalStats.value = null
     dailyStats.value = null
     monthlyStats.value = null
     error.value = ''
-    statsPeriod.value = 'daily'
+    statsPeriod.value = 'total'
     apiId.value = null
     // 清除多 Key 模式数据
     apiKeys.value = []
@@ -588,6 +602,7 @@ export const useApiStatsStore = defineStore('apistats', () => {
     statsPeriod,
     statsData,
     modelStats,
+    totalStats,
     dailyStats,
     monthlyStats,
     oemSettings,

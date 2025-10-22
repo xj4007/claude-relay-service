@@ -99,6 +99,15 @@
               <div class="flex w-full gap-2 md:w-auto">
                 <button
                   class="flex flex-1 items-center justify-center gap-1 px-4 py-2 text-xs font-medium md:flex-none md:gap-2 md:px-6 md:text-sm"
+                  :class="['period-btn', { active: statsPeriod === 'total' }]"
+                  :disabled="loading || modelStatsLoading"
+                  @click="switchPeriod('total')"
+                >
+                  <i class="fas fa-infinity text-xs md:text-sm" />
+                  总计
+                </button>
+                <button
+                  class="flex flex-1 items-center justify-center gap-1 px-4 py-2 text-xs font-medium md:flex-none md:gap-2 md:px-6 md:text-sm"
                   :class="['period-btn', { active: statsPeriod === 'daily' }]"
                   :disabled="loading || modelStatsLoading"
                   @click="switchPeriod('daily')"
