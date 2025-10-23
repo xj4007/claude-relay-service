@@ -37,7 +37,13 @@ const config = {
     // 粘性会话TTL配置（小时），默认1小时
     stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 1,
     // 续期阈值（分钟），默认0分钟（不续期）
-    renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0
+    renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0,
+    // 粘性会话并发守护：短暂等待现有请求释放后再降级
+    stickyConcurrency: {
+      waitEnabled: process.env.STICKY_CONCURRENCY_WAIT_ENABLED !== 'false',
+      maxWaitMs: parseInt(process.env.STICKY_CONCURRENCY_MAX_WAIT_MS) || 1200,
+      pollIntervalMs: parseInt(process.env.STICKY_CONCURRENCY_POLL_INTERVAL_MS) || 200
+    }
   },
 
   // 🎯 Claude API配置
@@ -46,7 +52,14 @@ const config = {
     apiVersion: process.env.CLAUDE_API_VERSION || '2023-06-01',
     betaHeader:
       process.env.CLAUDE_BETA_HEADER ||
-      'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14'
+      'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
+    overloadHandling: {
+      enabled: (() => {
+        const minutes = parseInt(process.env.CLAUDE_OVERLOAD_HANDLING_MINUTES) || 0
+        // 验证配置值：限制在0-1440分钟(24小时)内
+        return Math.max(0, Math.min(minutes, 1440))
+      })()
+    }
   },
 
   // ☁️ Bedrock API配置
@@ -73,12 +86,43 @@ const config = {
   // ⏱️ 请求超时配置
   requestTimeout: parseInt(process.env.REQUEST_TIMEOUT) || 600000, // 默认 10 分钟
 
+  // ⏰ 流式请求超时配置（针对大模型sonnet/opus的特殊超时监控）
+  streamTimeout: {
+    // 绝对超时：从请求开始计算的总时间（毫秒）
+    // 💡 3分钟足够检测真正的上游问题，又不会过早打断正常请求
+    total: parseInt(process.env.STREAM_TOTAL_TIMEOUT) || 180000, // 默认 3 分钟
+    // 空闲超时：多久没收到数据视为超时（毫秒）
+    // 💡 30秒无数据通常说明流已经卡住或上游有问题
+    idle: parseInt(process.env.STREAM_IDLE_TIMEOUT) || 30000, // 默认 30 秒
+    // 是否启用超时监控（false则禁用）
+    enabled: process.env.STREAM_TIMEOUT_ENABLED !== 'false' // 默认启用
+  },
+
+  // 🔄 服务器端重试配置（针对非流式请求的智能重试机制）
+  serverSideRetry: {
+    // 是否启用服务器端重试（默认启用）
+    enabled: process.env.SERVER_RETRY_ENABLED !== 'false',
+    // 5xx错误最大重试次数（同一账户立即重试）
+    maxRetries: parseInt(process.env.SERVER_MAX_RETRIES) || 3,
+    // 可重试的HTTP状态码列表（xx服务器错误）
+    retryableStatusCodes: [500, 502, 503, 504],
+    // 请求超时时间（毫秒），超时后切换账户
+    timeout: parseInt(process.env.SERVER_RETRY_TIMEOUT) || 180000, // 180秒（3分钟）
+    // 响应缓存TTL（秒），成功响应缓存时间
+    cacheTTL: parseInt(process.env.SERVER_CACHE_TTL) || 300, // 300秒（5分钟）
+    // 是否启用请求去重和合并（相同请求共享结果）
+    enableRequestQueue: process.env.SERVER_ENABLE_REQUEST_QUEUE !== 'false' // 默认启用
+  },
+
   // ⏰ 客户端断开后的上游等待配置
   upstreamWaitAfterClientDisconnect: {
     // 非流式请求：等待时间（毫秒）
-    nonStream: parseInt(process.env.UPSTREAM_WAIT_NON_STREAM) || 120000, // 120秒
+    // 💡 这个时间应该 >= 你期望的最大正常响应时间
+    // 目的：区分 上游慢 和 客户端超时太短
+    // 🔧 优化: 从20秒增加到180秒，给上游更多时间完成响应
+    nonStream: parseInt(process.env.UPSTREAM_WAIT_NON_STREAM) || 180000, // 180秒
     // 流式请求：等待时间（毫秒）
-    stream: parseInt(process.env.UPSTREAM_WAIT_STREAM) || 120000, // 120秒
+    stream: parseInt(process.env.UPSTREAM_WAIT_STREAM) || 180000, // 180秒
     // 是否启用延迟取消（false则立即取消）
     enabled: process.env.UPSTREAM_WAIT_ENABLED !== 'false' // 默认启用
   },
@@ -116,7 +160,7 @@ const config = {
     sessionSecret: process.env.WEB_SESSION_SECRET || 'CHANGE-THIS-SESSION-SECRET'
   },
 
-  // 🔒 客户端限制配置
+  // 🔐 客户端限制配置
   clientRestrictions: {
     // 预定义的客户端列表
     predefinedClients: [
@@ -208,6 +252,20 @@ const config = {
       : [],
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT) || 10000, // 10秒超时
     retries: parseInt(process.env.WEBHOOK_RETRIES) || 3 // 重试3次
+  },
+
+  // 🛡️ 内容审核配置
+  contentModeration: {
+    enabled: process.env.CONTENT_MODERATION_ENABLED === 'true',
+    apiBaseUrl: process.env.MODERATION_API_BASE_URL || 'https://api.siliconflow.cn',
+    apiKey: process.env.MODERATION_API_KEY || '',
+    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Next-80B-A3B-Instruct',
+    maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
+    timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
+    // 🔄 重试配置
+    maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 最多重试3次
+    retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 1000, // 重试间隔1秒（会递增）
+    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close' // fail-close（失败拒绝） 或 fail-open（失败放行）
   },
 
   // 🛠️ 开发配置
