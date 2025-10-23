@@ -39,31 +39,34 @@ CRITICAL: Return ONLY valid JSON, nothing else.`
   /**
    * 主审核方法
    * @param {Object} requestBody - Claude API 请求体
+   * @param {Object} apiKeyInfo - API Key 信息 {keyName, keyId, userId}
    * @returns {Promise<{passed: boolean, message?: string}>}
    */
-  async moderateContent(requestBody) {
+  async moderateContent(requestBody, apiKeyInfo = {}) {
     // 功能未启用，直接通过
     if (!this.enabled) {
       return { passed: true }
     }
 
     try {
-      // 提取用户输入
-      const userInput = this._extractUserInput(requestBody)
+      // 提取所有内容（用户消息和系统消息）
+      const allContent = this._extractAllContent(requestBody)
 
-      if (!userInput || userInput.trim().length === 0) {
-        logger.warn('⚠️ No user input found for moderation')
+      if (!allContent || allContent.trim().length === 0) {
+        logger.warn('⚠️ No content found for moderation')
         return { passed: true }
       }
 
-      logger.info(`🔍 Starting content moderation for input: ${userInput.substring(0, 100)}...`)
+      logger.info(`🔍 Starting content moderation for ${Object.keys(requestBody.messages).length} messages`)
 
       // 🔄 调用审核 API（带重试机制）
-      const moderationResult = await this._callModerationAPIWithRetry(userInput)
+      const moderationResult = await this._callModerationAPIWithRetry(allContent)
 
       if (moderationResult.success) {
         if (moderationResult.data.status === 'true') {
-          // 检测到违规
+          // 检测到违规 - 记录到专用日志
+          this._logNSFWViolation(requestBody, moderationResult.data.sensitiveWords, apiKeyInfo)
+
           const message = this._formatErrorMessage(moderationResult.data.sensitiveWords)
           logger.warn(`🚫 Content moderation failed: ${message}`)
           return {
@@ -83,7 +86,7 @@ CRITICAL: Return ONLY valid JSON, nothing else.`
         return {
           passed: false,
           message:
-            '内容审核服务暂不可用，请稍后重试。如问题持续，请联系管理员。\n提示：在 Claude Code 中按 ESC+ESC 可返回上次输入。'
+            '小红帽AI内容审核服务暂不可用，请稍后重试。如问题持续，请联系管理员。\n提示：在 Claude Code 中按 ESC+ESC 可返回上次输入。'
         }
       }
     } catch (error) {
@@ -92,39 +95,47 @@ CRITICAL: Return ONLY valid JSON, nothing else.`
       logger.error('❌ Exception in moderation, BLOCKING request (fail-close policy)')
       return {
         passed: false,
-        message: '内容审核服务异常，请稍后重试。如问题持续，请联系管理员。'
+        message: '小红帽AI内容审核服务异常，请稍后重试。如问题持续，请联系管理员。'
       }
     }
   }
 
   /**
-   * 提取用户输入的最后一条消息
+   * 提取所有消息内容（用户消息和系统消息）
    * @param {Object} requestBody - Claude API 请求体
    * @returns {string}
    */
-  _extractUserInput(requestBody) {
+  _extractAllContent(requestBody) {
     if (!requestBody.messages || !Array.isArray(requestBody.messages)) {
       return ''
     }
 
-    // 获取最后一条用户消息
-    for (let i = requestBody.messages.length - 1; i >= 0; i--) {
-      const message = requestBody.messages[i]
-      if (message.role === 'user') {
+    const allContent = []
+
+    // 遍历所有消息，提取 user 和 system 角色的内容
+    for (const message of requestBody.messages) {
+      if (message.role === 'user' || message.role === 'system') {
+        let content = ''
+
         // 处理不同类型的 content
         if (typeof message.content === 'string') {
-          return message.content
+          content = message.content
         } else if (Array.isArray(message.content)) {
-          // 提取文本内容
+          // 提取文本内容（支持多模态）
           const textContents = message.content
             .filter((item) => item.type === 'text')
             .map((item) => item.text)
-          return textContents.join('\n')
+          content = textContents.join('\n')
+        }
+
+        if (content.trim()) {
+          allContent.push(content)
         }
       }
     }
 
-    return ''
+    // 合并所有内容，用双换行符分隔以保持可读性
+    return allContent.join('\n\n')
   }
 
   /**
@@ -347,6 +358,33 @@ CRITICAL: Return ONLY valid JSON, nothing else.`
 
     logger.error('❌ All JSON parsing methods failed')
     return null
+  }
+
+  /**
+   * 记录 NSFW 违规信息到专用日志
+   * @param {Object} requestBody - Claude API 请求体
+   * @param {Array<string>} sensitiveWords - 违规词汇列表
+   * @param {Object} apiKeyInfo - API Key 信息 {keyName, keyId, userId}
+   */
+  _logNSFWViolation(requestBody, sensitiveWords, apiKeyInfo) {
+    try {
+      const allContent = this._extractAllContent(requestBody)
+
+      const logEntry = {
+        timestamp: new Date().toISOString(),
+        apiKey: apiKeyInfo?.keyName || 'unknown',
+        keyId: apiKeyInfo?.keyId || 'unknown',
+        userId: apiKeyInfo?.userId || 'unknown',
+        sensitiveWords: sensitiveWords || [],
+        messageCount: requestBody.messages?.length || 0,
+        fullContent: allContent
+      }
+
+      // 🚨 使用专用的 warn 级别日志记录（便于日志聚合和筛选）
+      logger.warn('🚨 NSFW Violation Detected:', JSON.stringify(logEntry, null, 2))
+    } catch (error) {
+      logger.error('❌ Failed to log NSFW violation:', error)
+    }
   }
 
   /**

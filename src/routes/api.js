@@ -106,10 +106,14 @@ async function handleMessagesRequest(req, res) {
       }
     }
 
-    // 🛡️ 内容审核：在发送到 Claude 之前检查用户输入
+    // 🛡️ 内容审核：在发送到 Claude 之前检查所有输入内容
     if (config.contentModeration && config.contentModeration.enabled) {
       try {
-        const moderationResult = await contentModerationService.moderateContent(req.body)
+        const moderationResult = await contentModerationService.moderateContent(req.body, {
+          keyName: req.apiKey.name,
+          keyId: req.apiKey.id,
+          userId: req.apiKey.userId
+        })
         if (!moderationResult.passed) {
           logger.warn(`🚫 Content moderation blocked request for key: ${req.apiKey.name}`)
           return res.status(400).json({
