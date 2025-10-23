@@ -186,10 +186,10 @@ function isStreamRetryableError(error) {
     return true
   }
 
-  // 检查错误消息
+  // 🚫 明确判断：prompt is too long 是客户端错误（用户输入过长），不可重试
   const errorMessage = error.message ? error.message.toLowerCase() : ''
   if (errorMessage.includes('prompt is too long')) {
-    return true
+    return false // 明确返回 false，立即停止重试
   }
 
   const responseData = error.response?.data
@@ -206,7 +206,7 @@ function isStreamRetryableError(error) {
     }
 
     if (responseText.includes('prompt is too long')) {
-      return true
+      return false // 明确返回 false，立即停止重试
     }
   }
   if (

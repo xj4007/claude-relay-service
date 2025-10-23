@@ -106,7 +106,11 @@ catch (error) {
 }
 ```
 - DNS 错误（例如 `EAI_AGAIN`、`ENOTFOUND`）会被判定为可重试的网络抖动，立即排除当前账号并继续重试。
-- Claude 官方返回的 400 `prompt is too long` 会被视为特殊可重试错误，加入 `excludedAccounts` 并在后续非流式降级中继续换号。
+- 🚫 **"prompt is too long" 不可重试**（从 2025-10-23 起）：
+  - **判断方式**：`isStreamRetryableError()` 检测到错误消息包含 "prompt is too long" 时，返回 `false`
+  - **处理行为**：立即停止重试循环，不排除账户，直接返回错误给用户
+  - **不影响其他 400 错误**：如 `thinking.budget_tokens` 等其他 400 错误仍按原逻辑处理
+  - **原因**：这是客户端错误（用户输入过长），重试和切换账户都无法解决问题
 
 ### 4. 非流式降级
 ```javascript
@@ -127,6 +131,99 @@ const result = await retryManager.executeWithRetry(
 // 转换JSON响应为SSE流
 await convertJsonToSSEStream(result.response, res)
 ```
+
+## 🚫 特殊错误处理：Prompt 过长（不可重试）
+
+### 错误识别
+
+当遇到以下特征的错误时，系统会**立即停止重试**并返回错误给用户：
+- **HTTP 状态码**: 400
+- **错误消息**: 包含 `"prompt is too long"`
+- **典型格式**: `"prompt is too long: 203046 tokens > 200000 maximum"`
+
+### 处理逻辑
+
+#### 流式请求处理
+```javascript
+// src/utils/sseConverter.js - isStreamRetryableError()
+const errorMessage = error.message ? error.message.toLowerCase() : ''
+if (errorMessage.includes('prompt is too long')) {
+  return false  // ❌ 不可重试，立即停止
+}
+```
+
+#### 非流式请求处理
+```javascript
+// src/utils/retryManager.js - isRetryableError()
+if (error && error.message) {
+  const errorMessage = typeof error.message === 'string' ? error.message.toLowerCase() : ''
+  if (errorMessage.includes('prompt is too long')) {
+    return false  // ❌ 不可重试
+  }
+}
+
+// _shouldSwitchAccountForSpecialError()
+const promptTooLongError = normalizedText.includes('prompt is too long')
+if (promptTooLongError) {
+  return null  // ❌ 不需要切换账户
+}
+```
+
+### 处理行为对比
+
+| 行为 | Prompt 过长错误 | 其他可重试错误 (500/503) |
+|------|----------------|------------------------|
+| **重试** | ❌ 不重试 | ✅ 最多3次 |
+| **切换账户** | ❌ 不切换 | ✅ 自动切换 |
+| **错误计数** | ❌ 不累积 | ✅ 累积到账户 |
+| **响应时间** | 立即返回 | 需等待重试完成 |
+| **用户体验** | 立即看到错误 | 可能延迟但成功率高 |
+
+### 日志示例
+
+**遇到 Prompt 过长错误时：**
+```log
+📤 [REQ] Key: my-key | Acc: account-01 | Model: claude-sonnet-4-5
+❌ [400] Account: account-01 | Type: Official | Error: prompt is too long: 203046 tokens > 200000 maximum
+⚠️ Non-retryable error detected, stopping immediately
+```
+
+**对比：遇到 500 错误时：**
+```log
+📤 [REQ] Key: my-key | Acc: account-01 | Model: claude-sonnet-4-5
+❌ [500] Account: account-01 | Type: Official | Error: Internal Server Error
+🔄 Excluded account account-01, will try another account
+🎯 Retry attempt 2/3 using account: account-02 (claude-console)
+✅ [200] Retry succeeded with account-02
+```
+
+### 原因说明
+
+**为什么不重试？**
+1. 这是**客户端错误**，表示用户输入超过模型的 token 限制
+2. 无论切换到哪个账户，所有账户使用相同的模型限制，结果都一样
+3. 重试只会：
+   - ❌ 浪费系统资源（多次无效请求）
+   - ❌ 浪费用户时间（等待注定失败的重试）
+   - ❌ 错误地标记正常账户为 `temp_error`
+
+**正确的用户响应方式：**
+- 使用 `/compact` 命令压缩上下文
+- 使用 `/clear` 命令清除历史
+- 手动减少输入内容
+- 分批处理长文本
+
+### 不影响其他 400 错误
+
+**仍然会切换账户重试的 400 错误：**
+- `thinking.budget_tokens` 验证错误（不同账户可能有不同配置）
+- `internal_error` 类型的 400 错误（官方内部错误，可能临时）
+- 其他可能因账户配置差异而可重试的 400 错误
+
+**实现时间：** 2025-10-23
+**相关文档：** [ERROR_HANDLING_RULES.md](./ERROR_HANDLING_RULES.md#-特殊处理prompt-过长错误不可重试)
+
+---
 
 ## 🎯 测试场景
 

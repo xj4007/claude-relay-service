@@ -613,17 +613,18 @@ class ClaudeConsoleRelayService {
         }
       } else if (response.status >= 400) {
         const { message: extractedMessage } = this._extractErrorDetails(response.data)
-        if (
-          response.status === 400 &&
-          this._isPromptTooLongError(extractedMessage, response.data)
-        ) {
-          await this._handleServerError(
-            accountId,
-            response.status,
-            response.data,
-            requestBody.model
-          )
-        }
+        // 🚫 移除 400 "prompt is too long" 的特殊处理 - 这是客户端错误，不应该重试
+        // if (
+        //   response.status === 400 &&
+        //   this._isPromptTooLongError(extractedMessage, response.data)
+        // ) {
+        //   await this._handleServerError(
+        //     accountId,
+        //     response.status,
+        //     response.data,
+        //     requestBody.model
+        //   )
+        // }
 
         // 返回脱敏后的错误信息
         const sanitizedError = this._sanitizeErrorMessage(response.status, response.data, accountId)
@@ -1376,27 +1377,30 @@ class ClaudeConsoleRelayService {
             } else if (error.response.status === 520) {
               // 🆕 520错误处理：Claude官方过载错误，与529同等对待
               claudeConsoleAccountService.markAccountOverloaded(accountId)
-            } else if (error.response.status === 400) {
-              const { message: promptErrorMessage } = this._extractErrorDetails(error.response.data)
-              if (this._isPromptTooLongError(promptErrorMessage, error.response.data)) {
-                this._handleServerError(
-                  accountId,
-                  error.response.status,
-                  error.response.data,
-                  body.model
-                ).catch((err) => {
-                  logger.error(`Failed to handle prompt length server error: ${err.message}`)
-                })
-                error.shouldRetryDueToSpecialError = true
-                const currentMessage =
-                  typeof error.message === 'string' ? error.message : 'Upstream 400 error'
-                if (!currentMessage.toLowerCase().includes(PROMPT_TOO_LONG_HINT)) {
-                  error.message = `${currentMessage}: ${PROMPT_TOO_LONG_HINT}`
-                } else {
-                  error.message = currentMessage
-                }
-              }
-            } else if (error.response.status >= 500 && error.response.status <= 504) {
+            }
+            // 🚫 移除 400 "prompt is too long" 的特殊处理 - 这是客户端错误，不应该重试
+            // else if (error.response.status === 400) {
+            //   const { message: promptErrorMessage } = this._extractErrorDetails(error.response.data)
+            //   if (this._isPromptTooLongError(promptErrorMessage, error.response.data)) {
+            //     this._handleServerError(
+            //       accountId,
+            //       error.response.status,
+            //       error.response.data,
+            //       body.model
+            //     ).catch((err) => {
+            //       logger.error(`Failed to handle prompt length server error: ${err.message}`)
+            //     })
+            //     error.shouldRetryDueToSpecialError = true
+            //     const currentMessage =
+            //       typeof error.message === 'string' ? error.message : 'Upstream 400 error'
+            //     if (!currentMessage.toLowerCase().includes(PROMPT_TOO_LONG_HINT)) {
+            //       error.message = `${currentMessage}: ${PROMPT_TOO_LONG_HINT}`
+            //     } else {
+            //       error.message = currentMessage
+            //     }
+            //   }
+            // }
+            else if (error.response.status >= 500 && error.response.status <= 504) {
               // 🔥 5xx错误处理：记录错误并检查是否需要标记为temp_error
               // ⚠️ 特殊处理504：如果客户端已断开，504可能是中间网关超时，不是真正的上游失败
               if (error.response.status === 504 && clientDisconnected) {

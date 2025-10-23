@@ -52,7 +52,40 @@
 | **502** | 网关错误 | 3次 | 5分钟 | `markAccountTempError()` |
 | **503** | 服务不可用 | 3次 | 5分钟 | `markAccountTempError()` |
 | **504** | 网关超时 | 3次 | 5分钟 | `markAccountTempError()` |
-| **400（prompt 过长）** | 请求体超限（`prompt is too long`） | 3次 | 5分钟 | `markAccountTempError()` |
+
+### 🚫 特殊处理：Prompt 过长错误（不可重试）
+
+**错误特征：** 400 错误 + 消息包含 `"prompt is too long"`
+
+**处理策略：**
+- ❌ **不进行任何重试** - 立即停止重试循环
+- ❌ **不切换账户** - 不排除当前账户，不尝试其他账户
+- ❌ **不累积错误计数** - 不记录到账户的 5xx 错误计数中
+- ✅ **立即返回错误** - 将完整错误信息直接返回给用户
+
+**原因说明：**
+- 这是**客户端错误**，表示用户输入的内容超过了模型的最大 token 限制
+- 无论切换到哪个账户，都会得到相同的错误（所有账户使用相同的模型限制）
+- 重试只会浪费系统资源和用户时间
+- 用户需要立即知道问题所在，以便采取行动（减少输入、使用 `/compact` 或 `/clear` 命令）
+
+**实现位置：**
+- 流式请求：[src/utils/sseConverter.js:189-211](../src/utils/sseConverter.js#L189-L211) - `isStreamRetryableError()` 返回 `false`
+- 非流式请求：[src/utils/retryManager.js:29-35](../src/utils/retryManager.js#L29-L35) - `isRetryableError()` 返回 `false`
+- 账户切换：[src/utils/retryManager.js:134-138](../src/utils/retryManager.js#L134-L138) - `_shouldSwitchAccountForSpecialError()` 返回 `null`
+
+**错误示例：**
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "message": "prompt is too long: 203046 tokens > 200000 maximum"
+  },
+  "type": "error"
+}
+```
+
+**注意：** 其他 400 错误（如 `thinking.budget_tokens` 验证错误）不受影响，仍然按照原有逻辑处理。
 
 > 🆕 当上游供应商（例如 88code）返回 `Too many active sessions` 或类似并发限制提示时，系统会先触发粘性会话并发守护：尝试在 1.2 秒封顶窗口内复用原账号；若仍满载则立刻切换账号并调用 `markAccountTempError()` 暂停该账号 6 分钟，恢复后自动清理粘性会话映射。
 

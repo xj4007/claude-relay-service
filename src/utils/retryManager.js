@@ -26,6 +26,14 @@ class RetryManager {
    * @returns {boolean}
    */
   isRetryableError(statusCode, error) {
+    // 🚫 明确判断：prompt is too long 是客户端错误（用户输入过长），不可重试
+    if (error && error.message) {
+      const errorMessage = typeof error.message === 'string' ? error.message.toLowerCase() : ''
+      if (errorMessage.includes('prompt is too long')) {
+        return false // 明确返回 false，不重试
+      }
+    }
+
     // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
     // 这是设计上的可重试错误，粘性会话机制会先等待（STICKY_CONCURRENCY_MAX_WAIT_MS）
     // 如果等待后仍然超限，则应该切换账号
@@ -123,10 +131,10 @@ class RetryManager {
         return 'thinking budget tokens validation error'
       }
 
+      // 🚫 明确判断：prompt is too long 是客户端错误，不需要切换账户
       const promptTooLongError = normalizedText.includes('prompt is too long')
-
       if (promptTooLongError) {
-        return 'prompt too long 400'
+        return null // 返回 null，表示不需要切换账户（让调用方直接返回错误）
       }
     }
 
