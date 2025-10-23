@@ -287,6 +287,11 @@ class ClaudeConsoleRelayService {
         }
       }
 
+      // 处理统一的客户端标识
+      if (account && account.useUnifiedClientId && account.unifiedClientId) {
+        this._replaceClientId(modifiedRequestBody, account.unifiedClientId)
+      }
+
       // 检查是否需要特殊处理请求体
       if (claudeCodeHeadersService.needsSpecialRequestBody(account)) {
         modifiedRequestBody = this._processSpecialVendorRequestBody(modifiedRequestBody)
@@ -451,6 +456,12 @@ class ClaudeConsoleRelayService {
       if (options.betaHeader) {
         requestConfig.headers['anthropic-beta'] = options.betaHeader
       }
+
+      // 📤 记录发送到上游的请求信息（含 user_id）
+      const userId = modifiedRequestBody?.metadata?.user_id || 'N/A'
+      logger.info(
+        `📤 [UPSTREAM] Sending request | Key: ${apiKeyData.name} | Acc: ${account.name} | Model: ${modifiedRequestBody.model} | UserID: ${userId}`
+      )
 
       // 发送请求
       const response = await axios(requestConfig)
@@ -798,6 +809,11 @@ class ClaudeConsoleRelayService {
         model: mappedModel
       }
 
+      // 处理统一的客户端标识
+      if (account && account.useUnifiedClientId && account.unifiedClientId) {
+        this._replaceClientId(modifiedRequestBody, account.unifiedClientId)
+      }
+
       // 检查是否需要特殊处理请求体
       if (claudeCodeHeadersService.needsSpecialRequestBody(account)) {
         modifiedRequestBody = this._processSpecialVendorRequestBody(modifiedRequestBody)
@@ -990,6 +1006,12 @@ class ClaudeConsoleRelayService {
       if (requestOptions.betaHeader) {
         requestConfig.headers['anthropic-beta'] = requestOptions.betaHeader
       }
+
+      // 📤 记录发送到上游的流式请求信息（含 user_id）
+      const userId = body?.metadata?.user_id || 'N/A'
+      logger.info(
+        `📤 [UPSTREAM-STREAM] Sending stream request | Acc: ${account.name} | Model: ${body.model} | UserID: ${userId}`
+      )
 
       // 发送请求
       const request = axios(requestConfig)
@@ -1489,7 +1511,7 @@ class ClaudeConsoleRelayService {
       return body
     }
 
-    // 使用增强器处理请求体
+    // 使用���强器处理请求体
     const enhancedBody = claudeCodeRequestEnhancer.enhanceRequest(body, {
       includeTools: false // 暂时不包含完整的tools定义
     })
@@ -1497,6 +1519,23 @@ class ClaudeConsoleRelayService {
     logger.info(`🏷️ Enhanced request body for special vendor using claudeCodeRequestEnhancer`)
 
     return enhancedBody
+  }
+
+  // 🔄 替换请求中的客户端标识
+  _replaceClientId(body, unifiedClientId) {
+    if (!body || !body.metadata || !body.metadata.user_id || !unifiedClientId) {
+      return
+    }
+
+    const userId = body.metadata.user_id
+    // user_id格式：user_{64位十六进制}_account__session_{uuid}
+    // 只替换第一个下划线后到_account之前的部分（客户端标识）
+    const match = userId.match(/^user_[a-f0-9]{64}(_account__session_[a-f0-9-]{36})$/)
+    if (match && match[1]) {
+      // 替换客户端标识部分
+      body.metadata.user_id = `user_${unifiedClientId}${match[1]}`
+      logger.info(`🔄 Replaced client ID with unified ID: ${body.metadata.user_id}`)
+    }
   }
 
   // 🔥 统一的5xx错误处理方法（记录错误并检查阈值）

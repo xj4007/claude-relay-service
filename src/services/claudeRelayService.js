@@ -629,7 +629,7 @@ class ClaudeRelayService {
     }
 
     // 处理统一的客户端标识
-    if (account && account.useUnifiedClientId === 'true' && account.unifiedClientId) {
+    if (account && account.useUnifiedClientId && account.unifiedClientId) {
       this._replaceClientId(processedBody, account.unifiedClientId)
     }
 
@@ -1004,6 +1004,12 @@ class ClaudeRelayService {
         options.headers['anthropic-beta'] = betaHeader
       }
 
+      // 📤 记录发送到上游的请求信息（含 user_id）
+      const userId = body?.metadata?.user_id || 'N/A'
+      logger.info(
+        `📤 [UPSTREAM] Sending request | Acc: ${accountId} | Model: ${body.model} | UserID: ${userId}`
+      )
+
       const req = https.request(options, (res) => {
         let responseData = Buffer.alloc(0)
 
@@ -1309,6 +1315,12 @@ class ClaudeRelayService {
       if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
+
+      // 📤 记录发送到上游的流式请求信息（含 user_id）
+      const userId = body?.metadata?.user_id || 'N/A'
+      logger.info(
+        `📤 [UPSTREAM-STREAM] Sending stream request | Acc: ${accountId} | Model: ${body.model} | UserID: ${userId}`
+      )
 
       const req = https.request(options, async (res) => {
         logger.debug(`🌊 Claude stream response status: ${res.statusCode}`)
@@ -1984,6 +1996,12 @@ class ClaudeRelayService {
       if (betaHeader) {
         options.headers['anthropic-beta'] = betaHeader
       }
+
+      // 📤 记录发送到上游的流式请求信息（含 user_id）
+      const userId = body?.metadata?.user_id || 'N/A'
+      logger.info(
+        `📤 [UPSTREAM-STREAM] Sending stream request | Model: ${body.model} | UserID: ${userId}`
+      )
 
       const req = https.request(options, (res) => {
         // 设置响应头

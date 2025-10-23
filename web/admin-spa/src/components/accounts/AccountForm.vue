@@ -1619,6 +1619,64 @@
               </label>
             </div>
 
+            <!-- Claude Console 统一客户端标识配置 -->
+            <div v-if="form.platform === 'claude-console'" class="mt-4">
+              <label class="flex items-start">
+                <input
+                  v-model="form.useUnifiedClientId"
+                  class="mt-1 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                  @change="handleUnifiedClientIdChange"
+                />
+                <div class="ml-3 flex-1">
+                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    使用统一的客户端标识
+                  </span>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    开启后将使用固定的客户端标识，使所有请求看起来来自同一个客户端，减少特征
+                  </p>
+                  <div v-if="form.useUnifiedClientId" class="mt-3">
+                    <div
+                      class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50"
+                    >
+                      <div class="mb-2 flex items-center justify-between">
+                        <span class="text-xs font-medium text-gray-600 dark:text-gray-400"
+                          >客户端标识 ID</span
+                        >
+                        <button
+                          class="rounded-md bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50"
+                          type="button"
+                          @click="regenerateClientId"
+                        >
+                          <i class="fas fa-sync-alt mr-1" />
+                          重新生成
+                        </button>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <code
+                          class="block w-full select-all break-all rounded bg-gray-100 px-3 py-2 font-mono text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                        >
+                          <span class="text-blue-600 dark:text-blue-400">{{
+                            form.unifiedClientId.substring(0, 8)
+                          }}</span
+                          ><span class="text-gray-500 dark:text-gray-500">{{
+                            form.unifiedClientId.substring(8, 56)
+                          }}</span
+                          ><span class="text-blue-600 dark:text-blue-400">{{
+                            form.unifiedClientId.substring(56)
+                          }}</span>
+                        </code>
+                      </div>
+                      <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                        <i class="fas fa-info-circle mr-1 text-blue-500" />
+                        此ID将替换请求中的user_id客户端部分，保留session部分用于粘性会话
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </label>
+            </div>
+
             <!-- 所有平台的优先级设置 -->
             <div>
               <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
@@ -2386,7 +2444,7 @@
           </div>
 
           <!-- Claude 统一客户端标识配置（编辑模式） -->
-          <div v-if="form.platform === 'claude'" class="mt-4">
+          <div v-if="form.platform === 'claude' || form.platform === 'claude-console'" class="mt-4">
             <label class="flex items-start">
               <input
                 v-model="form.useUnifiedClientId"
@@ -4446,6 +4504,9 @@ const createAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       // 账户并发限制字段
       data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
+      // 统一客户端标识字段
+      data.useUnifiedClientId = form.value.useUnifiedClientId || false
+      data.unifiedClientId = form.value.unifiedClientId || ''
     } else if (form.value.platform === 'openai-responses') {
       // OpenAI-Responses 账户特定数据
       data.baseApi = form.value.baseApi
@@ -4750,6 +4811,9 @@ const updateAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       // 账户并发限制字段
       data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
+      // 统一客户端标识字段
+      data.useUnifiedClientId = form.value.useUnifiedClientId || false
+      data.unifiedClientId = form.value.unifiedClientId || ''
     }
 
     // OpenAI-Responses 特定更新

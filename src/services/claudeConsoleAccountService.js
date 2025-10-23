@@ -68,7 +68,9 @@ class ClaudeConsoleAccountService {
       schedulable = true, // 是否可被调度
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
-      accountConcurrencyLimit = 0 // 账户并发限制，0表示不限制
+      accountConcurrencyLimit = 0, // 账户并发限制，0表示不限制
+      useUnifiedClientId = false, // 是否使用统一的客户端标识
+      unifiedClientId = '' // 统一的客户端标识
     } = options
 
     // 验证必填字段
@@ -117,7 +119,10 @@ class ClaudeConsoleAccountService {
       quotaResetTime, // 额度重置时间
       quotaStoppedAt: '', // 因额度停用的时间
       // 并发控制相关
-      accountConcurrencyLimit: accountConcurrencyLimit.toString() // 账户并发限制
+      accountConcurrencyLimit: accountConcurrencyLimit.toString(), // 账户并发限制
+      // 统一客户端标识相关
+      useUnifiedClientId: useUnifiedClientId.toString(), // 是否使用统一的客户端标识
+      unifiedClientId: unifiedClientId || '' // 统一的客户端标识
     }
 
     const client = redis.getClientSafe()
@@ -220,7 +225,10 @@ class ClaudeConsoleAccountService {
             quotaResetTime: accountData.quotaResetTime || '00:00',
             quotaStoppedAt: accountData.quotaStoppedAt || null,
             // 并发控制
-            accountConcurrencyLimit: parseInt(accountData.accountConcurrencyLimit) || 0
+            accountConcurrencyLimit: parseInt(accountData.accountConcurrencyLimit) || 0,
+            // 统一客户端标识
+            useUnifiedClientId: accountData.useUnifiedClientId === 'true',
+            unifiedClientId: accountData.unifiedClientId || ''
           })
         }
       }
@@ -274,6 +282,10 @@ class ClaudeConsoleAccountService {
     logger.debug(
       `[DEBUG] Final account data - name: ${accountData.name}, hasApiUrl: ${!!accountData.apiUrl}, hasApiKey: ${!!accountData.apiKey}, supportedModels: ${JSON.stringify(accountData.supportedModels)}`
     )
+
+    // 解析统一客户端标识字段
+    accountData.useUnifiedClientId = accountData.useUnifiedClientId === 'true'
+    accountData.unifiedClientId = accountData.unifiedClientId || ''
 
     return accountData
   }
@@ -369,6 +381,15 @@ class ClaudeConsoleAccountService {
       if (updates.accountConcurrencyLimit !== undefined) {
         updatedData.accountConcurrencyLimit = updates.accountConcurrencyLimit.toString()
       }
+
+      // 统一客户端标识相关字段
+      if (updates.useUnifiedClientId !== undefined) {
+        updatedData.useUnifiedClientId = updates.useUnifiedClientId.toString()
+      }
+      if (updates.unifiedClientId !== undefined) {
+        updatedData.unifiedClientId = updates.unifiedClientId
+      }
+
       // ✅ 直接保存 subscriptionExpiresAt（如果提供）
       // Claude Console 没有 token 刷新逻辑，不会覆盖此字段
       if (updates.subscriptionExpiresAt !== undefined) {
@@ -1720,64 +1741,61 @@ class ClaudeConsoleAccountService {
       )
 
       // 设置自动恢复
-      setTimeout(
-        async () => {
-          try {
-            const account = await this.getAccount(accountId)
-            if (account && account.status === 'temp_error' && account.tempErrorAt) {
-              // 验证是否已经达到自动恢复时间
-              const tempErrorAt = new Date(account.tempErrorAt)
-              const now = new Date()
-              const minutesSince = (now - tempErrorAt) / (1000 * 60)
+      setTimeout(async () => {
+        try {
+          const account = await this.getAccount(accountId)
+          if (account && account.status === 'temp_error' && account.tempErrorAt) {
+            // 验证是否已经达到自动恢复时间
+            const tempErrorAt = new Date(account.tempErrorAt)
+            const now = new Date()
+            const minutesSince = (now - tempErrorAt) / (1000 * 60)
 
-              if (minutesSince >= safeRecoveryMinutes) {
-                // 恢复账户
-                const recoveryUpdates = {
-                  status: 'active',
-                  schedulable: 'true'
-                }
+            if (minutesSince >= safeRecoveryMinutes) {
+              // 恢复账户
+              const recoveryUpdates = {
+                status: 'active',
+                schedulable: 'true'
+              }
 
-                await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, recoveryUpdates)
+              await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, recoveryUpdates)
 
-                // 删除临时错误相关字段
-                await client.hdel(
-                  `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
-                  'errorMessage',
-                  'tempErrorAt',
-                  'tempErrorAutoStopped',
-                  'tempErrorMetadata'
-                )
+              // 删除临时错误相关字段
+              await client.hdel(
+                `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
+                'errorMessage',
+                'tempErrorAt',
+                'tempErrorAutoStopped',
+                'tempErrorMetadata'
+              )
 
-                // 清除 5xx 错误计数
-                await this.clearServerErrors(accountId)
+              // 清除 5xx 错误计数
+              await this.clearServerErrors(accountId)
 
-                logger.success(
-                  `✅ Auto-recovered temp_error after ${safeRecoveryMinutes} minutes: ${account.name} (${accountId})`
-                )
+              logger.success(
+                `✅ Auto-recovered temp_error after ${safeRecoveryMinutes} minutes: ${account.name} (${accountId})`
+              )
 
-                // 发送恢复通知
-                try {
-                  const webhookNotifier = require('../utils/webhookNotifier')
-                  await webhookNotifier.sendAccountAnomalyNotification({
-                    accountId,
-                    accountName: account.name,
-                    platform: 'claude-console',
-                    status: 'recovered',
-                    errorCode: 'TEMP_ERROR_RECOVERED',
-                    reason: `Account auto-recovered after ${safeRecoveryMinutes} minutes from temp_error status`,
-                    timestamp: new Date().toISOString()
-                  })
-                } catch (webhookError) {
-                  logger.error('Failed to send recovery webhook:', webhookError)
-                }
+              // 发送恢复通知
+              try {
+                const webhookNotifier = require('../utils/webhookNotifier')
+                await webhookNotifier.sendAccountAnomalyNotification({
+                  accountId,
+                  accountName: account.name,
+                  platform: 'claude-console',
+                  status: 'recovered',
+                  errorCode: 'TEMP_ERROR_RECOVERED',
+                  reason: `Account auto-recovered after ${safeRecoveryMinutes} minutes from temp_error status`,
+                  timestamp: new Date().toISOString()
+                })
+              } catch (webhookError) {
+                logger.error('Failed to send recovery webhook:', webhookError)
               }
             }
-          } catch (error) {
-            logger.error(`❌ Failed to auto-recover temp_error account ${accountId}:`, error)
           }
-        },
-        recoveryDelayMs + safetyBufferMs
-      )
+        } catch (error) {
+          logger.error(`❌ Failed to auto-recover temp_error account ${accountId}:`, error)
+        }
+      }, recoveryDelayMs + safetyBufferMs)
 
       // 发送Webhook通知
       try {
@@ -1801,7 +1819,6 @@ class ClaudeConsoleAccountService {
       throw error
     }
   }
-
 
   // 🔢 账户并发控制方法
   // 增加账户并发计数
@@ -1949,7 +1966,7 @@ class ClaudeConsoleAccountService {
       return []
     }
   }
-  
+
   /**
    * ⏰ 检查账户订阅是否过期
    * @param {Object} account - 账户对象

@@ -192,7 +192,11 @@ const config = {
     apiKey: process.env.MODERATION_API_KEY || '',
     model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Next-80B-A3B-Instruct',
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
-    timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000
+    timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
+    // 🔄 重试配置
+    maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 最多重试3次
+    retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 1000, // 重试间隔1秒（会递增）
+    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close' // fail-close（失败拒绝） 或 fail-open（失败放行）
   },
 
   // 🛠️ 开发配置
