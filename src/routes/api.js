@@ -123,6 +123,7 @@ async function handleMessagesRequest(req, res) {
             }
           })
         }
+        logger.info(`✅ Content moderation passed for key: ${req.apiKey.name}`)
       } catch (moderationError) {
         // 审核服务出错时记录日志但不阻止请求（优雅降级）
         logger.error('❌ Content moderation service error:', moderationError)

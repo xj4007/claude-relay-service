@@ -190,7 +190,10 @@ const config = {
     enabled: process.env.CONTENT_MODERATION_ENABLED === 'true',
     apiBaseUrl: process.env.MODERATION_API_BASE_URL || 'https://api.siliconflow.cn',
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Next-80B-A3B-Instruct',
+    model: process.env.MODERATION_MODEL || 'deepseek-ai/DeepSeek-V3.2-Exp', // 第一次审核（小模型）
+    advancedModel:
+      process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 第二次审核（大模型）
+    enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
     // 🔄 重试配置
