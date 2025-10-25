@@ -1048,9 +1048,9 @@ router.post('/api/transaction-logs', async (req, res) => {
       data: {
         logs: result.logs,
         pagination: result.pagination,
-        retentionHours: 3,
-        // 添加说明：交易日志只保留3小时，数量可能少于总统计数据中的请求数
-        note: 'Transaction logs are retained for 3 hours only. The total count shown here may be less than the total requests in overall statistics.'
+        retentionHours: 12,
+        // 添加说明：交易日志只保留12小时，数量可能少于总统计数据中的请求数
+        note: 'Transaction logs are retained for 12 hours only. The total count shown here may be less than the total requests in overall statistics.'
       }
     })
   } catch (error) {

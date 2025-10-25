@@ -2,7 +2,7 @@
 
 ## 📋 功能概述
 
-交易日志功能为 Claude Relay Service 提供了详细的 API 调用记录查询能力，支持分页、时间范围筛选，并实时显示剩余额度。用户可以通过 Web 界面查看最近 3 小时内的所有 API 调用明细。
+交易日志功能为 Claude Relay Service 提供了详细的 API 调用记录查询能力，支持分页、时间范围筛选，并实时显示剩余额度。用户可以通过 Web 界面查看最近 12 小时内的所有 API 调用明细。
 
 ---
 
@@ -11,7 +11,7 @@
 ### 1. 数据存储
 - **存储引擎**: Redis Sorted Set
 - **数据结构**: `transaction_log:${keyId}`
-- **保留时长**: 3 小时（自动清理）
+- **保留时长**: 12 小时（自动清理）
 - **排序方式**: 按时间戳倒序（最新记录在前）
 
 ### 2. 查询功能
@@ -61,8 +61,8 @@ redisClient.getTransactionLogs = async function (
 
 **核心逻辑**：
 - 使用 Redis Pipeline 批量操作
-- 自动删除 3 小时前的旧数据（`ZREMRANGEBYSCORE`）
-- 设置 Key 过期时间为 4 小时（容错）
+- 自动删除 12 小时前的旧数据（`ZREMRANGEBYSCORE`）
+- 设置 Key 过期时间为 13 小时（容错）
 
 **文件位置**: [src/models/redis.js:1993-2087](../src/models/redis.js#L1993-L2087)
 
@@ -109,8 +109,8 @@ router.post('/api/transaction-logs', async (req, res) => {
       "total": 64,
       "totalPages": 7
     },
-    "retentionHours": 3,
-    "note": "Transaction logs are retained for 3 hours only. The total count shown here may be less than the total requests in overall statistics."
+    "retentionHours": 12,
+    "note": "Transaction logs are retained for 12 hours only. The total count shown here may be less than the total requests in overall statistics."
   }
 }
 ```
@@ -221,14 +221,14 @@ async recordUsage(keyId, inputTokens, outputTokens, ...) {
 
 4. **统计信息面板**
    - 本页记录数
-   - 总记录数（3h）
+   - 总记录数（12h）
    - 本页消费总额
    - 数据保留时长
 
 5. **数据说明提示**
    ```
    数据说明：
-   交易日志仅保留最近 3 小时的详细记录，因此这里显示的总记录数可能
+   交易日志仅保留最近 12 小时的详细记录，因此这里显示的总记录数可能
    少于统计概览页面中的"总请求数"。统计概览页面显示的是 API Key
    创建以来的累计请求总数。
    ```
@@ -306,7 +306,7 @@ export const API_ENDPOINTS = {
 export const TRANSACTION_CONFIG = {
   DEFAULT_PAGE_SIZE: 10,
   MAX_PAGE_SIZE: 100,
-  RETENTION_HOURS: 3,
+  RETENTION_HOURS: 12,
   TIME_RANGES: [
     { value: '1h', label: '最近 1 小时', hours: 1 },
     { value: '3h', label: '最近 3 小时', hours: 3 },
@@ -375,8 +375,8 @@ JSON 字符串：
 }
 
 # 过期策略
-- 自动删除 3 小时前的数据（ZREMRANGEBYSCORE）
-- Key 过期时间：4 小时（EXPIRE）
+- 自动删除 12 小时前的数据（ZREMRANGEBYSCORE）
+- Key 过期时间：13 小时（EXPIRE）
 ```
 
 ### 2. 查询性能优化
@@ -386,8 +386,8 @@ JSON 字符串：
 // 使用 Pipeline 批量操作
 const pipeline = client.pipeline()
 pipeline.zadd(logKey, timestamp, logEntry)
-pipeline.zremrangebyscore(logKey, '-inf', threeHoursAgo)
-pipeline.expire(logKey, 4 * 60 * 60)
+pipeline.zremrangebyscore(logKey, '-inf', twelveHoursAgo)
+pipeline.expire(logKey, 13 * 60 * 60)
 await pipeline.exec()
 
 // 分页查询使用 ZREVRANGEBYSCORE + LIMIT
@@ -481,7 +481,7 @@ await redis.addTransactionLog(keyId, {
 **问题描述**：
 - 统计数据：显示 68 个请求
 - 交易日志：只有 64 条记录
-- 用户当天才开始使用（排除 3h 保留问题）
+- 用户当天才开始使用（排除 12h 保留问题）
 
 **根本原因**：
 - 项目中存在两个记录使用的函数：
@@ -511,14 +511,14 @@ await redis.addTransactionLog(keyId, {
 | 数据源 | 存储位置 | 保留时长 | 统计范围 |
 |--------|----------|----------|----------|
 | **统计数据** | `usage:${keyId}` | 永久（或配置） | 从 API Key 创建开始的所有请求 |
-| **交易日志** | `transaction_log:${keyId}` | 3 小时 | 最近 3 小时的详细记录 |
+| **交易日志** | `transaction_log:${keyId}` | 12 小时 | 最近 12 小时的详细记录 |
 
 **一致性验证**：
 ```javascript
-// 对于 3 小时内的数据
+// 对于 12 小时内的数据
 统计数据.requests ≈ 交易日志.pagination.total
 
-// 超过 3 小时的数据
+// 超过 12 小时的数据
 统计数据.requests > 交易日志.pagination.total  // ✅ 正常
 ```
 
@@ -529,7 +529,7 @@ await redis.addTransactionLog(keyId, {
 log[i].remainingQuota - log[i].cost ≈ log[i+1].remainingQuota
 
 // 总费用验证
-sum(transactionLogs.cost) ≈ 统计数据.currentTotalCost  // 对于 3h 内
+sum(transactionLogs.cost) ≈ 统计数据.currentTotalCost  // 对于 12h 内
 ```
 
 ---
@@ -573,7 +573,7 @@ sum(transactionLogs.cost) ≈ 统计数据.currentTotalCost  // 对于 3h 内
 ### 2. 数据脱敏
 - 不记录请求内容（仅统计信息）
 - 不记录敏感的账户凭据
-- 3 小时自动清理（隐私保护）
+- 12 小时自动清理（隐私保护）
 
 ### 3. 参数验证
 ```javascript
