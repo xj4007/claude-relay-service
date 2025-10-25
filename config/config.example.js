@@ -189,15 +189,23 @@ const config = {
   contentModeration: {
     enabled: process.env.CONTENT_MODERATION_ENABLED === 'true',
     apiBaseUrl: process.env.MODERATION_API_BASE_URL || 'https://api.siliconflow.cn',
+    // 🔑 多API Key支持：支持单个key或逗号分隔的多个key(自动去除空格)
+    apiKeys: (() => {
+      const keys = process.env.MODERATION_API_KEY || process.env.MODERATION_API_KEYS || ''
+      return keys
+        .split(',')
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0)
+    })(),
+    // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'deepseek-ai/DeepSeek-V3.2-Exp', // 第一次审核（小模型）
-    advancedModel:
-      process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 第二次审核（大模型）
+    model: process.env.MODERATION_MODEL || 'zai-org/GLM-4.6', // 第一次审核（小模型）
+    advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 第二次审核（大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
     // 🔄 重试配置
-    maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 最多重试3次
+    maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 单个key最多重试3次
     retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 1000, // 重试间隔1秒（会递增）
     failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close' // fail-close（失败拒绝） 或 fail-open（失败放行）
   },

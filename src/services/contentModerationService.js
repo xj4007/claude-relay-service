@@ -6,7 +6,17 @@ class ContentModerationService {
   constructor() {
     this.enabled = config.contentModeration?.enabled || false
     this.apiBaseUrl = config.contentModeration?.apiBaseUrl
-    this.apiKey = config.contentModeration?.apiKey
+
+    // 🔑 多API Key支持：优先使用apiKeys数组，向后兼容单个apiKey
+    this.apiKeys = config.contentModeration?.apiKeys || []
+    if (this.apiKeys.length === 0 && config.contentModeration?.apiKey) {
+      // 向后兼容：如果没有apiKeys但有apiKey，使用单个key
+      this.apiKeys = [config.contentModeration.apiKey]
+    }
+
+    // 当前使用的Key索引（用于轮询）
+    this.currentKeyIndex = 0
+
     this.model = config.contentModeration?.model
     this.advancedModel =
       config.contentModeration?.advancedModel || 'deepseek-ai/DeepSeek-V3.1-Terminus'
@@ -18,6 +28,23 @@ class ContentModerationService {
     this.maxRetries = config.contentModeration?.maxRetries || 3
     this.retryDelay = config.contentModeration?.retryDelay || 1000
     this.failStrategy = config.contentModeration?.failStrategy || 'fail-close'
+
+    // 📊 记录每个Key的使用情况
+    this.keyStats = this.apiKeys.map((key, index) => ({
+      index,
+      keyPrefix: this._maskKey(key),
+      successCount: 0,
+      failureCount: 0,
+      lastUsed: null
+    }))
+
+    // 日志输出配置信息
+    if (this.enabled) {
+      logger.info(`🛡️ Content Moderation Enabled with ${this.apiKeys.length} API Key(s)`)
+      this.keyStats.forEach((stat) => {
+        logger.info(`   - Key ${stat.index + 1}: ${stat.keyPrefix}`)
+      })
+    }
 
     // 🛡️ 审核系统提示词（严格版：默认拒绝，仅对明确编程场景放行）
     this.systemPrompt = `You are a content moderator for a CODING platform. Return JSON only.
@@ -204,6 +231,78 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
+   * 🔑 脱敏Key（显示前6位和后4位）
+   * @param {string} key - API Key
+   * @returns {string}
+   */
+  _maskKey(key) {
+    if (!key || key.length < 10) {
+      return '***'
+    }
+    return `${key.substring(0, 6)}...${key.substring(key.length - 4)}`
+  }
+
+  /**
+   * 🔄 获取下一个可用的API Key（轮询策略）
+   * @returns {string|null}
+   */
+  _getNextApiKey() {
+    if (this.apiKeys.length === 0) {
+      return null
+    }
+
+    // 从当前索引开始轮询
+    const key = this.apiKeys[this.currentKeyIndex]
+    const keyInfo = this.keyStats[this.currentKeyIndex]
+
+    // 更新最后使用时间
+    keyInfo.lastUsed = new Date().toISOString()
+
+    logger.info(
+      `🔑 Using API Key ${this.currentKeyIndex + 1}/${this.apiKeys.length}: ${keyInfo.keyPrefix}`
+    )
+
+    return key
+  }
+
+  /**
+   * 🔄 切换到下一个API Key
+   * @returns {boolean} 是否还有可用的Key
+   */
+  _switchToNextKey() {
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length
+
+    // 如果已经轮询回到第一个Key，说明所有Key都试过了
+    if (this.currentKeyIndex === 0) {
+      return false // 没有更多Key了
+    }
+
+    return true // 还有其他Key可以尝试
+  }
+
+  /**
+   * 📊 记录Key使用成功
+   * @param {number} keyIndex - Key索引
+   */
+  _recordKeySuccess(keyIndex) {
+    if (this.keyStats[keyIndex]) {
+      this.keyStats[keyIndex].successCount++
+      logger.info(`✅ Key ${keyIndex + 1} success: ${this.keyStats[keyIndex].successCount} times`)
+    }
+  }
+
+  /**
+   * 📊 记录Key使用失败
+   * @param {number} keyIndex - Key索引
+   */
+  _recordKeyFailure(keyIndex) {
+    if (this.keyStats[keyIndex]) {
+      this.keyStats[keyIndex].failureCount++
+      logger.warn(`❌ Key ${keyIndex + 1} failure: ${this.keyStats[keyIndex].failureCount} times`)
+    }
+  }
+
+  /**
    * 提取最后一条用户消息
    * @param {Object} requestBody - Claude API 请求体
    * @returns {string}
@@ -346,46 +445,89 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
-   * 🔄 调用审核 API（带重试机制）
+   * 🔄 调用审核 API（带重试机制和多Key轮询）
    * @param {string} userInput - 用户输入内容
    * @param {string} modelOverride - 可选的模型覆盖参数
    * @returns {Promise<{success: boolean, data?: Object}>}
    */
   async _callModerationAPIWithRetry(userInput, modelOverride = null) {
     const model = modelOverride || this.model
-    let lastError = null
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        logger.info(`🔄 Moderation attempt ${attempt}/${this.maxRetries} with model: ${model}`)
+    // 🔄 多Key轮询策略
+    const totalKeys = this.apiKeys.length
+    if (totalKeys === 0) {
+      logger.error('❌ No API keys configured for content moderation')
+      return { success: false }
+    }
 
-        const result = await this._callModerationAPI(userInput, model)
+    // 重置到第一个Key开始
+    this.currentKeyIndex = 0
+    let keysAttempted = 0
 
-        if (result.success) {
-          logger.info(`✅ Moderation succeeded on attempt ${attempt} with ${model}`)
-          return result
+    // 外层循环：遍历所有API Key
+    while (keysAttempted < totalKeys) {
+      const currentKey = this._getNextApiKey()
+      const currentKeyIndex = this.currentKeyIndex
+      let lastError = null
+
+      logger.info(
+        `🔑 Trying Key ${currentKeyIndex + 1}/${totalKeys}: ${this.keyStats[currentKeyIndex].keyPrefix}`
+      )
+
+      // 内层循环：对当前Key重试maxRetries次
+      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        try {
+          logger.info(
+            `🔄 Key ${currentKeyIndex + 1} - Attempt ${attempt}/${this.maxRetries} with model: ${model}`
+          )
+
+          const result = await this._callModerationAPI(userInput, model, currentKey)
+
+          if (result.success) {
+            logger.info(
+              `✅ Moderation succeeded on Key ${currentKeyIndex + 1}, attempt ${attempt} with ${model}`
+            )
+            this._recordKeySuccess(currentKeyIndex)
+            return result
+          }
+
+          // 记录失败但不立即返回，继续重试
+          lastError = new Error('API returned success=false')
+          logger.warn(`⚠️ Key ${currentKeyIndex + 1} - Attempt ${attempt} failed, will retry...`)
+        } catch (error) {
+          lastError = error
+          logger.error(
+            `❌ Key ${currentKeyIndex + 1} - Attempt ${attempt} threw error:`,
+            error.message
+          )
         }
 
-        // 记录失败但不立即返回，继续重试
-        lastError = new Error('API returned success=false')
-        logger.warn(`⚠️ Moderation attempt ${attempt} failed, will retry...`)
-      } catch (error) {
-        lastError = error
-        logger.error(`❌ Moderation attempt ${attempt} threw error:`, error.message)
+        // 如果不是最后一次尝试，等待后重试（指数退避）
+        if (attempt < this.maxRetries) {
+          const delay = this.retryDelay * attempt // 1s, 2s, 3s
+          logger.info(`⏳ Waiting ${delay}ms before retry...`)
+          await this._sleep(delay)
+        }
       }
 
-      // 如果不是最后一次尝试，等待后重试（指数退避）
-      if (attempt < this.maxRetries) {
-        const delay = this.retryDelay * attempt // 1s, 2s, 3s
-        logger.info(`⏳ Waiting ${delay}ms before retry...`)
-        await this._sleep(delay)
+      // 当前Key的所有重试都失败了
+      this._recordKeyFailure(currentKeyIndex)
+      logger.error(
+        `❌ All ${this.maxRetries} attempts failed for Key ${currentKeyIndex + 1}/${totalKeys}. Last error:`,
+        lastError?.message || 'unknown'
+      )
+
+      // 切换到下一个Key
+      keysAttempted++
+      if (keysAttempted < totalKeys) {
+        logger.warn(`🔄 Switching to next API Key (${keysAttempted + 1}/${totalKeys})...`)
+        this._switchToNextKey()
       }
     }
 
-    // 所有重试都失败
+    // 所有Key都失败了
     logger.error(
-      `❌ All ${this.maxRetries} moderation attempts failed with ${model}. Last error:`,
-      lastError?.message || 'unknown'
+      `❌ All ${totalKeys} API Key(s) exhausted with ${model}. Total attempts: ${totalKeys * this.maxRetries}`
     )
     return { success: false }
   }
@@ -403,9 +545,10 @@ IF NO programming keywords found → ALWAYS BLOCK.`
    * 调用审核 API
    * @param {string} userInput - 用户输入内容
    * @param {string} model - 使用的模型
+   * @param {string} apiKey - 使用的API Key
    * @returns {Promise<{success: boolean, data?: Object}>}
    */
-  async _callModerationAPI(userInput, model) {
+  async _callModerationAPI(userInput, model, apiKey) {
     try {
       const requestData = {
         top_p: 0.7,
@@ -433,7 +576,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         url: `${this.apiBaseUrl}/v1/chat/completions`,
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`
+          Authorization: `Bearer ${apiKey}`
         },
         data: requestData,
         timeout: this.timeout
@@ -634,47 +777,89 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
-   * 🔄 审核系统消息（简化版，只返回0/1，使用高级模型）
+   * 🔄 审核系统消息（简化版，只返回0/1，使用高级模型，支持多Key轮询）
    * @param {string} systemMessages - 系统消息内容
    * @returns {Promise<{success: boolean, data?: {status: number}}>}
    */
   async _moderateSystemMessages(systemMessages) {
-    let lastError = null
+    // 🔄 多Key轮询策略
+    const totalKeys = this.apiKeys.length
+    if (totalKeys === 0) {
+      logger.error('❌ No API keys configured for content moderation')
+      return { success: false }
+    }
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        logger.info(
-          `🔄 System moderation attempt ${attempt}/${this.maxRetries} with ${this.advancedModel}`
-        )
+    // 重置到第一个Key开始
+    this.currentKeyIndex = 0
+    let keysAttempted = 0
 
-        const result = await this._callSystemModerationAPI(systemMessages)
+    // 外层循环：遍历所有API Key
+    while (keysAttempted < totalKeys) {
+      const currentKey = this._getNextApiKey()
+      const currentKeyIndex = this.currentKeyIndex
+      let lastError = null
 
-        if (result.success) {
+      logger.info(
+        `🔑 System moderation - Trying Key ${currentKeyIndex + 1}/${totalKeys}: ${this.keyStats[currentKeyIndex].keyPrefix}`
+      )
+
+      // 内层循环：对当前Key重试maxRetries次
+      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        try {
           logger.info(
-            `✅ System moderation succeeded on attempt ${attempt} with ${this.advancedModel}`
+            `🔄 System moderation - Key ${currentKeyIndex + 1} - Attempt ${attempt}/${this.maxRetries} with ${this.advancedModel}`
           )
-          return result
+
+          const result = await this._callSystemModerationAPI(systemMessages, currentKey)
+
+          if (result.success) {
+            logger.info(
+              `✅ System moderation succeeded on Key ${currentKeyIndex + 1}, attempt ${attempt} with ${this.advancedModel}`
+            )
+            this._recordKeySuccess(currentKeyIndex)
+            return result
+          }
+
+          lastError = new Error('API returned success=false')
+          logger.warn(
+            `⚠️ System moderation - Key ${currentKeyIndex + 1} - Attempt ${attempt} failed, will retry...`
+          )
+        } catch (error) {
+          lastError = error
+          logger.error(
+            `❌ System moderation - Key ${currentKeyIndex + 1} - Attempt ${attempt} threw error:`,
+            error.message
+          )
         }
 
-        lastError = new Error('API returned success=false')
-        logger.warn(`⚠️ System moderation attempt ${attempt} failed, will retry...`)
-      } catch (error) {
-        lastError = error
-        logger.error(`❌ System moderation attempt ${attempt} threw error:`, error.message)
+        // 如果不是最后一次尝试，等待后重试（指数退避）
+        if (attempt < this.maxRetries) {
+          const delay = this.retryDelay * attempt
+          logger.info(`⏳ Waiting ${delay}ms before retry...`)
+          await this._sleep(delay)
+        }
       }
 
-      // 如果不是最后一次尝试，等待后重试（指数退避）
-      if (attempt < this.maxRetries) {
-        const delay = this.retryDelay * attempt
-        logger.info(`⏳ Waiting ${delay}ms before retry...`)
-        await this._sleep(delay)
+      // 当前Key的所有重试都失败了
+      this._recordKeyFailure(currentKeyIndex)
+      logger.error(
+        `❌ All ${this.maxRetries} system moderation attempts failed for Key ${currentKeyIndex + 1}/${totalKeys}. Last error:`,
+        lastError?.message || 'unknown'
+      )
+
+      // 切换到下一个Key
+      keysAttempted++
+      if (keysAttempted < totalKeys) {
+        logger.warn(
+          `🔄 Switching to next API Key for system moderation (${keysAttempted + 1}/${totalKeys})...`
+        )
+        this._switchToNextKey()
       }
     }
 
-    // 所有重试都失败
+    // 所有Key都失败了
     logger.error(
-      `❌ All ${this.maxRetries} system moderation attempts failed with ${this.advancedModel}. Last error:`,
-      lastError?.message || 'unknown'
+      `❌ All ${totalKeys} API Key(s) exhausted for system moderation with ${this.advancedModel}. Total attempts: ${totalKeys * this.maxRetries}`
     )
     return { success: false }
   }
@@ -682,9 +867,10 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   /**
    * 调用系统消息审核API（简化版）
    * @param {string} systemMessages - 系统消息内容
+   * @param {string} apiKey - 使用的API Key
    * @returns {Promise<{success: boolean, data?: {status: number}}>}
    */
-  async _callSystemModerationAPI(systemMessages) {
+  async _callSystemModerationAPI(systemMessages, apiKey) {
     try {
       const systemPrompt = `You are a content safety moderator for a PROGRAMMING platform. Analyze system prompts and respond ONLY with JSON.
 
@@ -748,7 +934,7 @@ Remember: Return ONLY {"status": 1} for safe or {"status": 0} for NSFW. Do not f
         url: `${this.apiBaseUrl}/v1/chat/completions`,
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`
+          Authorization: `Bearer ${apiKey}`
         },
         data: requestData,
         timeout: this.timeout
