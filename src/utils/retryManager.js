@@ -115,7 +115,7 @@ class RetryManager {
 
       const officialInternalError =
         normalizedText.includes('"type":"internal_error"') ||
-        normalizedText.includes('\'type\':\'internal_error\'') ||
+        normalizedText.includes("'type':'internal_error'") ||
         normalizedText.includes('server internal error, please contact admin')
 
       if (officialInternalError) {
@@ -124,8 +124,7 @@ class RetryManager {
 
       // 🆕 检测 thinking.budget_tokens 相关错误
       const thinkingBudgetError =
-        normalizedText.includes('max_tokens') &&
-        normalizedText.includes('thinking.budget_tokens')
+        normalizedText.includes('max_tokens') && normalizedText.includes('thinking.budget_tokens')
 
       if (thinkingBudgetError) {
         return 'thinking budget tokens validation error'
@@ -330,12 +329,18 @@ class RetryManager {
    * @param {Object} config - 配置对象
    */
   updateConfig(config) {
-    if (config.maxRetries !== undefined) this.MAX_RETRIES = config.maxRetries
-    if (config.retryDelay !== undefined) this.RETRY_DELAY = config.retryDelay
-    if (config.slowResponseTimeout !== undefined)
+    if (config.maxRetries !== undefined) {
+      this.MAX_RETRIES = config.maxRetries
+    }
+    if (config.retryDelay !== undefined) {
+      this.RETRY_DELAY = config.retryDelay
+    }
+    if (config.slowResponseTimeout !== undefined) {
       this.SLOW_RESPONSE_TIMEOUT = config.slowResponseTimeout
-    if (config.retryableStatusCodes !== undefined)
+    }
+    if (config.retryableStatusCodes !== undefined) {
       this.RETRYABLE_STATUS_CODES = config.retryableStatusCodes
+    }
 
     logger.info('✅ RetryManager config updated:', this.getConfig())
   }

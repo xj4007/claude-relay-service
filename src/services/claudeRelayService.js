@@ -531,7 +531,7 @@ class ClaudeRelayService {
     let processedBody = JSON.parse(JSON.stringify(body))
 
     // 判断是否是真实的 Claude Code 请求
-    const isRealClaudeCode = this.isRealClaudeCodeRequest(processedBody, clientHeaders)
+    const isRealClaudeCode = this.isRealClaudeCodeRequest(processedBody)
 
     // 如果不是真实的 Claude Code 请求，使用增强器补充必需参数
     if (!isRealClaudeCode) {
@@ -975,14 +975,8 @@ class ClaudeRelayService {
     // 获取统一的 User-Agent
     const unifiedUA = await this.captureAndGetUnifiedUserAgent(clientHeaders, account)
 
-    // 获取过滤后的客户端 headers
-    const filteredHeaders = this._filterClientHeaders(clientHeaders)
-
-    // 判断是否是真实的 Claude Code 请求
-    const isRealClaudeCode = this.isRealClaudeCodeRequest(body)
-
     // 🔒 统一请求头策略：无论是否真实 Claude Code，都使用统一的请求头
-    const finalHeaders = {}
+    let finalHeaders = {}
     let requestPayload = body
 
     // 获取该账号的统一 Claude Code headers

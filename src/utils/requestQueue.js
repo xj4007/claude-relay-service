@@ -148,7 +148,7 @@ class RequestQueue {
 
     for (const [cacheKey, request] of this.pendingRequests.entries()) {
       pending.push({
-        cacheKey: cacheKey.substring(0, 16) + '...',
+        cacheKey: `${cacheKey.substring(0, 16)}...`,
         elapsedMs: now - request.startTime,
         waitingRequests: request.requestCount - 1 // 减去初始请求
       })

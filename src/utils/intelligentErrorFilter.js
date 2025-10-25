@@ -12,7 +12,9 @@ class IntelligentErrorFilter {
    * @returns {boolean} 是否包含中文
    */
   static containsChinese(text) {
-    if (!text || typeof text !== 'string') return false
+    if (!text || typeof text !== 'string') {
+      return false
+    }
     return /[\u4e00-\u9fa5]/.test(text)
   }
 
@@ -22,7 +24,9 @@ class IntelligentErrorFilter {
    * @returns {boolean} 是否包含允许的域名
    */
   static containsAllowedDomains(text) {
-    if (!text || typeof text !== 'string') return false
+    if (!text || typeof text !== 'string') {
+      return false
+    }
 
     const allowedDomains = [
       'claude.ai',
@@ -32,7 +36,7 @@ class IntelligentErrorFilter {
     ]
 
     const loweredText = text.toLowerCase()
-    return allowedDomains.some(domain => loweredText.includes(domain))
+    return allowedDomains.some((domain) => loweredText.includes(domain))
   }
 
   /**
@@ -41,13 +45,17 @@ class IntelligentErrorFilter {
    * @returns {boolean} 是否包含敏感URL
    */
   static containsSensitiveUrls(text) {
-    if (!text || typeof text !== 'string') return false
+    if (!text || typeof text !== 'string') {
+      return false
+    }
 
     // 匹配URL和域名的正则
     const urlPattern = /(?:https?:\/\/|www\.|[a-zA-Z0-9-]+\.)[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/gi
     const matches = text.match(urlPattern)
 
-    if (!matches) return false
+    if (!matches) {
+      return false
+    }
 
     // 检查是否有非允许的域名
     for (const match of matches) {
@@ -66,7 +74,9 @@ class IntelligentErrorFilter {
    * @returns {string} 处理后的文本
    */
   static removeSensitiveUrls(text) {
-    if (!text || typeof text !== 'string') return text
+    if (!text || typeof text !== 'string') {
+      return text
+    }
 
     // 匹配完整URL的正则
     const urlPattern = /(?:https?:\/\/|www\.)[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*[^\s]*/gi
@@ -85,19 +95,21 @@ class IntelligentErrorFilter {
    * @returns {boolean} 是否包含敏感信息
    */
   static containsSensitiveInfo(text) {
-    if (!text || typeof text !== 'string') return false
+    if (!text || typeof text !== 'string') {
+      return false
+    }
 
     const sensitivePatterns = [
-      /\b[A-Za-z0-9]{40,}\b/,  // 长token/密钥
-      /\bsk-[a-zA-Z0-9]{48}\b/,  // API密钥格式
-      /\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/i,  // UUID
-      /Bearer\s+[A-Za-z0-9-._~+\/]+=*/i,  // Bearer token
-      /account_id["\s:]+["']?[a-zA-Z0-9-]+/i,  // 账户ID
-      /user_id["\s:]+["']?[a-zA-Z0-9-]+/i,  // 用户ID
-      /email["\s:]+["']?[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i  // 邮箱地址
+      /\b[A-Za-z0-9]{40,}\b/, // 长token/密钥
+      /\bsk-[a-zA-Z0-9]{48}\b/, // API密钥格式
+      /\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/i, // UUID
+      /Bearer\s+[A-Za-z0-9-._~+\/]+=*/i, // Bearer token
+      /account_id["\s:]+["']?[a-zA-Z0-9-]+/i, // 账户ID
+      /user_id["\s:]+["']?[a-zA-Z0-9-]+/i, // 用户ID
+      /email["\s:]+["']?[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i // 邮箱地址
     ]
 
-    return sensitivePatterns.some(pattern => pattern.test(text))
+    return sensitivePatterns.some((pattern) => pattern.test(text))
   }
 
   /**
@@ -125,10 +137,8 @@ class IntelligentErrorFilter {
       }
 
       // 获取错误消息
-      let errorMessage = parsedError?.error?.message ||
-                        parsedError?.message ||
-                        errorContent ||
-                        'Unknown error'
+      let errorMessage =
+        parsedError?.error?.message || parsedError?.message || errorContent || 'Unknown error'
 
       // 日志记录原始错误（用于调试）
       logger.debug('Filtering error response:', {
@@ -179,7 +189,6 @@ class IntelligentErrorFilter {
 
       // 6. 对于其他错误，返回通用消息
       return this.getGenericError(statusCode)
-
     } catch (error) {
       logger.error('Error in filterError:', error)
       return this.getGenericError(statusCode)

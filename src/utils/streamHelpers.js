@@ -40,7 +40,9 @@ class StreamTimeoutMonitor {
 
     // 绝对超时：从请求开始计算
     this.totalTimeout = setTimeout(() => {
-      if (this.stopped) return
+      if (this.stopped) {
+        return
+      }
 
       const elapsed = Date.now() - this.startTime
       logger.warn(`⏰ Stream total timeout triggered: ${elapsed}ms`)
@@ -54,7 +56,9 @@ class StreamTimeoutMonitor {
 
     // 空闲超时：定期检查是否长时间无数据
     this.idleCheckInterval = setInterval(() => {
-      if (this.stopped) return
+      if (this.stopped) {
+        return
+      }
 
       const idleTime = Date.now() - this.lastDataTime
 
@@ -81,7 +85,9 @@ class StreamTimeoutMonitor {
    * 停止监控（清理所有定时器）
    */
   stop() {
-    if (this.stopped) return
+    if (this.stopped) {
+      return
+    }
 
     this.stopped = true
 

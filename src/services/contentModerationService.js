@@ -409,7 +409,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     try {
       const requestData = {
         top_p: 0.7,
-        model: model,
+        model,
         messages: [
           {
             content: this.systemPrompt,
@@ -444,10 +444,10 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
       // 解析响应
       if (response.data && response.data.choices && response.data.choices[0]) {
-        let content = response.data.choices[0].message.content
+        const { content } = response.data.choices[0].message
 
         // 🔧 自适应 JSON 解析：尝试多种方式提取 JSON
-        let result = this._parseJSON(content)
+        const result = this._parseJSON(content)
 
         if (!result) {
           logger.error('❌ Failed to parse JSON from API response')
@@ -497,7 +497,9 @@ IF NO programming keywords found → ALWAYS BLOCK.`
    * @returns {Object|null} 解析后的 JSON 对象或 null
    */
   _parseJSON(text) {
-    if (!text) return null
+    if (!text) {
+      return null
+    }
 
     // 方法 1：直接解析（如果是纯 JSON）
     try {
@@ -528,7 +530,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
     // 方法 4：清理文本后重试（移除 markdown 代码块）
     try {
-      let cleaned = text
+      const cleaned = text
         .replace(/```json\n?/g, '')
         .replace(/```\n?/g, '')
         .trim()
@@ -544,7 +546,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
     // 方法 5：尝试修复常见的 JSON 错误
     try {
-      let fixed = text
+      const fixed = text
         .replace(/'/g, '"') // 单引号改双引号
         .replace(/,\s*}/g, '}') // 移除末尾逗号
         .replace(/,\s*]/g, ']')
@@ -585,8 +587,8 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
         // 📝 详细的违规内容记录
         violation: {
-          userMessages: userMessages, // 用户输入的所有消息
-          systemMessages: systemMessages, // 系统提示词
+          userMessages, // 用户输入的所有消息
+          systemMessages, // 系统提示词
           fullContent: allContent, // 完整合并内容（便于全文搜索）
           model: requestBody.model || 'unknown', // 请求的模型
           maxTokens: requestBody.max_tokens || 'N/A' // 最大token数
@@ -757,7 +759,7 @@ Remember: Return ONLY {"status": 1} for safe or {"status": 0} for NSFW. Do not f
 
       // 解析响应
       if (response.data && response.data.choices && response.data.choices[0]) {
-        const message = response.data.choices[0].message
+        const { message } = response.data.choices[0]
         const content = message?.content
 
         if (content === null || content === undefined || content === '') {

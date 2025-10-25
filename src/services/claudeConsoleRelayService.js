@@ -258,7 +258,7 @@ class ClaudeConsoleRelayService {
       // 📍 请求开始 - 精简到一行
       const vendor = claudeCodeHeadersService.detectSpecialVendor(account)
       logger.info(
-        `📤 [REQ] Key: ${apiKeyData.name} | Acc: ${account.name} | Model: ${requestBody.model}${mappedModel !== requestBody.model ? '→' + mappedModel : ''} | Vendor: ${vendor?.vendorName || 'std'}`
+        `📤 [REQ] Key: ${apiKeyData.name} | Acc: ${account.name} | Model: ${requestBody.model}${mappedModel !== requestBody.model ? `→${mappedModel}` : ''} | Vendor: ${vendor?.vendorName || 'std'}`
       )
 
       // 创建修改后的请求体
@@ -528,7 +528,7 @@ class ClaudeConsoleRelayService {
                 statusCode: response.status,
                 headers: response.headers,
                 body: response.data,
-                usage: usage
+                usage
               },
               180 // TTL: 3分钟
             )
@@ -826,7 +826,7 @@ class ClaudeConsoleRelayService {
       }
 
       logger.info(
-        `📡 [STREAM] Key: ${apiKeyData.name} | Acc: ${account.name} | Model: ${requestBody.model}${mappedModel !== requestBody.model ? '→' + mappedModel : ''}`
+        `📡 [STREAM] Key: ${apiKeyData.name} | Acc: ${account.name} | Model: ${requestBody.model}${mappedModel !== requestBody.model ? `→${mappedModel}` : ''}`
       )
 
       // 创建修改后的请求体
@@ -860,7 +860,8 @@ class ClaudeConsoleRelayService {
         accountId,
         usageCallback,
         streamTransformer,
-        options
+        options,
+        responseStream // 将responseStream作为clientResponse传入
       )
 
       // 更新最后使用时间
@@ -892,7 +893,8 @@ class ClaudeConsoleRelayService {
     accountId,
     usageCallback,
     streamTransformer = null,
-    requestOptions = {}
+    requestOptions = {},
+    clientResponse = null
   ) {
     // 构建完整的API URL
     const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
@@ -963,6 +965,7 @@ class ClaudeConsoleRelayService {
 
     return new Promise((resolve, reject) => {
       let aborted = false
+      let clientDisconnected = false
 
       // 🔥 创建流式超时监控器
       const streamTimeoutConfig = config.streamTimeout || {
@@ -982,7 +985,9 @@ class ClaudeConsoleRelayService {
         )
 
         timeoutMonitor.start((timeoutType, duration) => {
-          if (monitorStopped || aborted) return
+          if (monitorStopped || aborted) {
+            return
+          }
 
           logger.error(
             `⏱️ Stream timeout detected (${timeoutType}): ${duration}ms | Acc: ${account?.name}`
@@ -1059,6 +1064,16 @@ class ClaudeConsoleRelayService {
       logger.info(
         `📤 [UPSTREAM-STREAM] Sending stream request | Acc: ${account.name} | Model: ${body.model} | UserID: ${userId}`
       )
+
+      // 监听客户端断开事件
+      const handleClientDisconnect = () => {
+        clientDisconnected = true
+        logger.debug(`🔌 [STREAM] Client disconnected | Acc: ${account.name}`)
+      }
+
+      if (clientResponse) {
+        clientResponse.once('close', handleClientDisconnect)
+      }
 
       // 发送请求
       const request = axios(requestConfig)
@@ -1729,7 +1744,9 @@ class ClaudeConsoleRelayService {
 
   // 🧠 判断是否为主要Claude模型
   _isMainClaudeModel(model) {
-    if (!model) return false
+    if (!model) {
+      return false
+    }
     const modelLower = model.toLowerCase()
     return (
       modelLower.includes('sonnet') ||
