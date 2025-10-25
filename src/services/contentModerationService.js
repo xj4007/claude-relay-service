@@ -98,9 +98,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
           // 第二次API调用失败 - 保守策略，拒绝请求
           if (!secondResult.success) {
-            logger.error(
-              '❌ Second check API failed, applying fail-close policy, BLOCKING request'
-            )
+            logger.error('❌ Second check API failed, applying fail-close policy, BLOCKING request')
             this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
             return {
               passed: false,
@@ -122,9 +120,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
           // 第二次通过 → 误判纠正，继续后续流程
           if (secondResult.data.status === 'false') {
-            logger.info(
-              `✅ False positive corrected by ${this.advancedModel}, allowing request`
-            )
+            logger.info(`✅ False positive corrected by ${this.advancedModel}, allowing request`)
             // 使用第二次的结果继续流程（检查是否有NSFW词汇）
             const sensitiveWords = secondResult.data.sensitiveWords || []
             if (sensitiveWords.length === 0) {
@@ -313,6 +309,43 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
+   * 提取所有用户消息（数组格式，用于违规日志）
+   * @param {Object} requestBody - Claude API 请求体
+   * @returns {Array<string>}
+   */
+  _extractUserMessages(requestBody) {
+    if (!requestBody.messages || !Array.isArray(requestBody.messages)) {
+      return []
+    }
+
+    const userMessages = []
+
+    // 遍历所有消息，提取 user 角色的内容
+    for (const message of requestBody.messages) {
+      if (message.role === 'user') {
+        let content = ''
+
+        // 处理不同类型的 content
+        if (typeof message.content === 'string') {
+          content = message.content
+        } else if (Array.isArray(message.content)) {
+          // 提取文本内容（支持多模态）
+          const textContents = message.content
+            .filter((item) => item.type === 'text')
+            .map((item) => item.text)
+          content = textContents.join('\n')
+        }
+
+        if (content.trim()) {
+          userMessages.push(content)
+        }
+      }
+    }
+
+    return userMessages
+  }
+
+  /**
    * 🔄 调用审核 API（带重试机制）
    * @param {string} userInput - 用户输入内容
    * @param {string} modelOverride - 可选的模型覆盖参数
@@ -430,9 +463,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         // 标准化字段名（支持 words 或 sensitiveWords）
         const words = result.words || result.sensitiveWords || []
 
-        logger.info(
-          `📊 Moderation result: status=${result.status}, words=${JSON.stringify(words)}`
-        )
+        logger.info(`📊 Moderation result: status=${result.status}, words=${JSON.stringify(words)}`)
 
         return {
           success: true,
@@ -449,10 +480,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
         logger.error(`❌ Moderation API timeout (${this.timeout}ms):`, error.message)
       } else if (error.response) {
-        logger.error(
-          `❌ Moderation API HTTP error ${error.response.status}:`,
-          error.response.data
-        )
+        logger.error(`❌ Moderation API HTTP error ${error.response.status}:`, error.response.data)
       } else if (error.request) {
         logger.error('❌ Moderation API no response received:', error.message)
       } else {
@@ -541,6 +569,10 @@ IF NO programming keywords found → ALWAYS BLOCK.`
    */
   _logNSFWViolation(requestBody, sensitiveWords, apiKeyInfo) {
     try {
+      // 提取用户消息和系统消息（分开记录）
+      const userMessages = this._extractUserMessages(requestBody)
+      const systemMessagesStr = this._extractSystemMessages(requestBody)
+      const systemMessages = systemMessagesStr ? [systemMessagesStr] : [] // 转换为数组
       const allContent = this._extractAllContent(requestBody)
 
       const logEntry = {
@@ -550,11 +582,36 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         userId: apiKeyInfo?.userId || 'unknown',
         sensitiveWords: sensitiveWords || [],
         messageCount: requestBody.messages?.length || 0,
-        fullContent: allContent
+
+        // 📝 详细的违规内容记录
+        violation: {
+          userMessages: userMessages, // 用户输入的所有消息
+          systemMessages: systemMessages, // 系统提示词
+          fullContent: allContent, // 完整合并内容（便于全文搜索）
+          model: requestBody.model || 'unknown', // 请求的模型
+          maxTokens: requestBody.max_tokens || 'N/A' // 最大token数
+        }
       }
 
       // 🚨 使用专用的 warn 级别日志记录（便于日志聚合和筛选）
       logger.warn('🚨 NSFW Violation Detected:', JSON.stringify(logEntry, null, 2))
+
+      // 📋 额外输出更易读的格式（方便快速核查）
+      logger.warn('📋 Violation Summary:')
+      logger.warn(`   - API Key: ${logEntry.apiKey} (${logEntry.keyId})`)
+      logger.warn(`   - User ID: ${logEntry.userId}`)
+      logger.warn(`   - Sensitive Words: [${sensitiveWords.join(', ')}]`)
+      logger.warn(`   - Message Count: ${logEntry.messageCount}`)
+      logger.warn(`   - User Messages:`)
+      userMessages.forEach((msg, idx) => {
+        logger.warn(`     [${idx + 1}] ${msg.substring(0, 200)}${msg.length > 200 ? '...' : ''}`)
+      })
+      if (systemMessages.length > 0) {
+        logger.warn(`   - System Messages:`)
+        systemMessages.forEach((msg, idx) => {
+          logger.warn(`     [${idx + 1}] ${msg.substring(0, 200)}${msg.length > 200 ? '...' : ''}`)
+        })
+      }
     } catch (error) {
       logger.error('❌ Failed to log NSFW violation:', error)
     }
