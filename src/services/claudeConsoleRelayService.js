@@ -445,12 +445,37 @@ class ClaudeConsoleRelayService {
         method: 'POST',
         url: apiEndpoint,
         data: modifiedRequestBody,
-        headers: requestHeaders,
-        httpsAgent: proxyAgent,
+        headers: {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': userAgent,
+          ...filteredHeaders
+        },
         timeout: config.requestTimeout || 600000,
         signal: abortController.signal,
         validateStatus: () => true // 接受所有状态码
       }
+
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+
+      // 根据 API Key 格式选择认证方式
+      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+        // Anthropic 官方 API Key 使用 x-api-key
+        requestConfig.headers['x-api-key'] = account.apiKey
+        logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
+      } else {
+        // 其他 API Key 使用 Authorization Bearer
+        requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
+        logger.debug('[DEBUG] Using Authorization Bearer authentication')
+      }
+
+      logger.debug(
+        `[DEBUG] Initial headers before beta: ${JSON.stringify(requestConfig.headers, null, 2)}`
+      )
 
       // 添加beta header如果需要
       if (options.betaHeader) {
@@ -996,11 +1021,32 @@ class ClaudeConsoleRelayService {
         method: 'POST',
         url: apiEndpoint,
         data: body,
-        headers: requestHeaders,
-        httpsAgent: proxyAgent,
+        headers: {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': userAgent,
+          ...filteredHeaders
+        },
         timeout: config.requestTimeout || 600000,
         responseType: 'stream',
         validateStatus: () => true // 接受所有状态码
+      }
+
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+
+      // 根据 API Key 格式选择认证方式
+      if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {
+        // Anthropic 官方 API Key 使用 x-api-key
+        requestConfig.headers['x-api-key'] = account.apiKey
+        logger.debug('[DEBUG] Using x-api-key authentication for sk-ant-* API key')
+      } else {
+        // 其他 API Key 使用 Authorization Bearer
+        requestConfig.headers['Authorization'] = `Bearer ${account.apiKey}`
+        logger.debug('[DEBUG] Using Authorization Bearer authentication')
       }
 
       // 添加beta header如果需要
