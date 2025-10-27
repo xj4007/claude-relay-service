@@ -20,6 +20,9 @@ class ContentModerationService {
     this.model = config.contentModeration?.model
     this.advancedModel =
       config.contentModeration?.advancedModel || 'deepseek-ai/DeepSeek-V3.1-Terminus'
+    // 🚀 Pro模型配置（TPM更大，用于重试时的备选模型）
+    this.proModel =
+      config.contentModeration?.proModel || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp'
     this.enableSecondCheck = config.contentModeration?.enableSecondCheck !== false
     this.maxTokens = config.contentModeration?.maxTokens || 100
     this.timeout = config.contentModeration?.timeout || 10000
@@ -513,14 +516,18 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
-   * 🔄 调用审核 API（带重试机制和多Key轮询）
+   * 🔄 调用审核 API（带模型级联重试和多Key轮询）
+   * 重试策略：
+   * 1. 对当前Key，先用默认模型重试maxRetries次
+   * 2. 如果失败，换成Pro模型重试maxRetries次
+   * 3. 如果还失败，切换到下一个API Key
+   * 4. 对新Key重复步骤1-2
+   *
    * @param {string} userInput - 用户输入内容
-   * @param {string} modelOverride - 可选的模型覆盖参数
+   * @param {string} modelOverride - 可选的模型覆盖参数（如果提供，则跳过模型级联，直接使用该模型）
    * @returns {Promise<{success: boolean, data?: Object}>}
    */
   async _callModerationAPIWithRetry(userInput, modelOverride = null) {
-    const model = modelOverride || this.model
-
     // 🔄 多Key轮询策略
     const totalKeys = this.apiKeys.length
     if (totalKeys === 0) {
@@ -542,46 +549,76 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         `🔑 Trying Key ${currentKeyIndex + 1}/${totalKeys}: ${this.keyStats[currentKeyIndex].keyPrefix}`
       )
 
-      // 内层循环：对当前Key重试maxRetries次
-      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-        try {
-          logger.info(
-            `🔄 Key ${currentKeyIndex + 1} - Attempt ${attempt}/${this.maxRetries} with model: ${model}`
-          )
+      // 🚀 模型级联重试策略（如果有modelOverride则跳过级联）
+      const modelsToTry = modelOverride
+        ? [modelOverride]
+        : [this.model, this.proModel] // 默认模型 → Pro模型
 
-          const result = await this._callModerationAPI(userInput, model, currentKey)
+      let modelIndex = 0
+      for (const currentModel of modelsToTry) {
+        modelIndex++
+        const isProModel = currentModel === this.proModel
+        const modelLabel = isProModel ? 'Pro Model' : 'Default Model'
 
-          if (result.success) {
+        logger.info(
+          `📋 Key ${currentKeyIndex + 1} - Trying ${modelLabel} (${modelIndex}/${modelsToTry.length}): ${currentModel}`
+        )
+
+        // 内层循环：对当前模型重试maxRetries次
+        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+          try {
             logger.info(
-              `✅ Moderation succeeded on Key ${currentKeyIndex + 1}, attempt ${attempt} with ${model}`
+              `🔄 Key ${currentKeyIndex + 1} - ${modelLabel} - Attempt ${attempt}/${this.maxRetries}`
             )
-            this._recordKeySuccess(currentKeyIndex)
-            return result
+
+            const result = await this._callModerationAPI(userInput, currentModel, currentKey)
+
+            if (result.success) {
+              logger.info(
+                `✅ Moderation succeeded! Key ${currentKeyIndex + 1}, ${modelLabel}, attempt ${attempt}`
+              )
+              this._recordKeySuccess(currentKeyIndex)
+              return result
+            }
+
+            // 记录失败但不立即返回，继续重试
+            lastError = new Error('API returned success=false')
+            logger.warn(
+              `⚠️ Key ${currentKeyIndex + 1} - ${modelLabel} - Attempt ${attempt} failed, will retry...`
+            )
+          } catch (error) {
+            lastError = error
+            logger.error(
+              `❌ Key ${currentKeyIndex + 1} - ${modelLabel} - Attempt ${attempt} threw error:`,
+              error.message
+            )
           }
 
-          // 记录失败但不立即返回，继续重试
-          lastError = new Error('API returned success=false')
-          logger.warn(`⚠️ Key ${currentKeyIndex + 1} - Attempt ${attempt} failed, will retry...`)
-        } catch (error) {
-          lastError = error
-          logger.error(
-            `❌ Key ${currentKeyIndex + 1} - Attempt ${attempt} threw error:`,
-            error.message
-          )
+          // 如果不是最后一次尝试，等待后重试（指数退避）
+          if (attempt < this.maxRetries) {
+            const delay = this.retryDelay * attempt // 1s, 2s, 3s
+            logger.info(`⏳ Waiting ${delay}ms before retry...`)
+            await this._sleep(delay)
+          }
         }
 
-        // 如果不是最后一次尝试，等待后重试（指数退避）
-        if (attempt < this.maxRetries) {
-          const delay = this.retryDelay * attempt // 1s, 2s, 3s
-          logger.info(`⏳ Waiting ${delay}ms before retry...`)
-          await this._sleep(delay)
+        // 当前模型的所有重试都失败了
+        logger.error(
+          `❌ All ${this.maxRetries} attempts failed for Key ${currentKeyIndex + 1} with ${modelLabel} (${currentModel})`
+        )
+
+        // 如果还有下一个模型（Pro模型），不等待直接尝试
+        if (modelIndex < modelsToTry.length) {
+          logger.warn(
+            `🔄 Switching to ${modelsToTry[modelIndex] === this.proModel ? 'Pro Model (higher TPM)' : 'next model'}...`
+          )
         }
       }
 
-      // 当前Key的所有重试都失败了
+      // 当前Key的所有模型都失败了
       this._recordKeyFailure(currentKeyIndex)
       logger.error(
-        `❌ All ${this.maxRetries} attempts failed for Key ${currentKeyIndex + 1}/${totalKeys}. Last error:`,
+        `❌ All models exhausted for Key ${currentKeyIndex + 1}/${totalKeys}. Tried: ${modelsToTry.join(' → ')}. Last error:`,
         lastError?.message || 'unknown'
       )
 
@@ -594,8 +631,11 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     }
 
     // 所有Key都失败了
+    const totalAttempts = modelOverride
+      ? totalKeys * this.maxRetries
+      : totalKeys * 2 * this.maxRetries // 2个模型
     logger.error(
-      `❌ All ${totalKeys} API Key(s) exhausted with ${model}. Total attempts: ${totalKeys * this.maxRetries}`
+      `❌ All ${totalKeys} API Key(s) exhausted. Total attempts: ${totalAttempts}`
     )
     return { success: false }
   }

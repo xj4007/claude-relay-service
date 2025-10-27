@@ -76,9 +76,13 @@
 
 #### 重试机制
 
-- 📌 最多重试 3 次
+- 📌 **模型级联重试**：
+  1. 先用默认模型重试 3 次
+  2. 如果失败，换成 Pro 模型重试 3 次（TPM更大）
+  3. 如果还失败，切换到下一个 API Key
+  4. 对新 Key 重复步骤 1-2
 - ⏳ 指数退避延迟：1s → 2s → 3s
-- 🔄 所有重试都失败后拒绝请求
+- 🔄 所有模型和 Key 都耗尽后才拒绝请求
 
 ## 🔧 使用方式
 
@@ -100,8 +104,9 @@ module.exports = {
     apiKey: 'sk-xxxxx', // 单个审核API密钥（如果提供apiKeys则忽略）
 
     // 三级审核模型配置
-    model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 第一级：小模型（快速检测）
-    advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 第二、三级：大模型（高精度）
+    model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认模型（快速检测）
+    proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，重试时备选）
+    advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度）
     enableSecondCheck: true, // 启用二次审核（默认true）
 
     // API限制
@@ -109,38 +114,42 @@ module.exports = {
     timeout: 10000, // 超时时间（毫秒）
 
     // 重试配置
-    maxRetries: 3, // 单个key最多重试次数
+    maxRetries: 3, // 单个模型最多重试次数
     retryDelay: 1000, // 初始延迟（毫秒，会递增：1s, 2s, 3s）
     failStrategy: 'fail-close' // 故障策略（仅支持fail-close）
   }
 }
 ```
 
-### 多API Key轮询机制
+### 多API Key + 模型级联轮询机制
 
-当配置多个API Key时，系统会自动实现**智能轮询**：
+当配置多个API Key时，系统会自动实现**智能轮询 + 模型级联重试**：
 
-1. **优先使用第一个Key**：所有请求首先尝试第一个Key
-2. **单Key重试3次**：如果第一个Key连续失败3次（默认配置）
-3. **自动切换到下一个Key**：切换到第二个Key并重试3次
-4. **轮询所有Key**：依次尝试所有配置的Key
-5. **失败后拒绝**：所有Key都耗尽后才拒绝请求
+1. **优先使用第一个Key + 默认模型**：所有请求首先尝试第一个Key的默认模型
+2. **模型级联重试**：如果默认模型连续失败3次，切换到Pro模型重试3次
+3. **自动切换到下一个Key**：如果Pro模型也失败3次，切换到第二个Key
+4. **新Key重复模型级联**：对新Key也执行默认模型→Pro模型的级联重试
+5. **轮询所有Key**：依次尝试所有配置的Key（每个Key都尝试2个模型）
+6. **失败后拒绝**：所有Key和模型都耗尽后才拒绝请求
 
 **适用场景**：
 
-- ✅ 应对硅基流动的RPM/TPM限流
+- ✅ 应对硅基流动的RPM/TPM限流（Pro模型TPM更大）
 - ✅ 提高服务可用性和容错能力
 - ✅ 多账户负载分担
+- ✅ 自动降级到高TPM模型
 
 **示例日志**：
 
 ```
 🔑 Using API Key 1/3: sk-abc...xyz
-🔄 Key 1 - Attempt 1/3 with model: deepseek-ai/DeepSeek-V3.2-Exp
-❌ Key 1 - Attempt 3 threw error: rate limit exceeded
-🔄 Switching to next API Key (2/3)...
-🔑 Using API Key 2/3: sk-def...uvw
-✅ Moderation succeeded on Key 2, attempt 1
+📋 Key 1 - Trying Default Model (1/2): deepseek-ai/DeepSeek-V3.2-Exp
+🔄 Key 1 - Default Model - Attempt 1/3
+❌ Key 1 - Default Model - Attempt 3 threw error: rate limit exceeded
+🔄 Switching to Pro Model (higher TPM)...
+📋 Key 1 - Trying Pro Model (2/2): Pro/deepseek-ai/DeepSeek-V3.2-Exp
+🔄 Key 1 - Pro Model - Attempt 1/3
+✅ Moderation succeeded! Key 1, Pro Model, attempt 1
 ```
 
 ### 环境变量配置（可选）
@@ -156,14 +165,15 @@ MODERATION_API_KEY=sk-xxxxx,sk-yyyyy,sk-zzzzz
 MODERATION_API_KEYS=sk-xxxxx,sk-yyyyy,sk-zzzzz
 
 # 三级审核模型配置
-MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp
-MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct
+MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp           # 默认模型
+MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp   # Pro模型（重试备选）
+MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct  # 高级模型
 MODERATION_ENABLE_SECOND_CHECK=true
 
 # API限制和重试
 CONTENT_MODERATION_MAX_TOKENS=100
 CONTENT_MODERATION_TIMEOUT=10000
-CONTENT_MODERATION_MAX_RETRIES=3          # 单个key重试次数
+CONTENT_MODERATION_MAX_RETRIES=3          # 单个模型重试次数
 CONTENT_MODERATION_RETRY_DELAY=1000
 CONTENT_MODERATION_FAIL_STRATEGY=fail-close
 ```
@@ -527,8 +537,9 @@ contentModeration: {
   apiKey: 'sk_xxxxx',              // 审核API认证密钥
 
   // 三级审核模型配置
-  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 第一级：小模型（快速检测）
-  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 第二、三级：大模型（高精度）
+  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 默认模型（快速检测）
+  proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp',    // Pro模型（TPM更大，重试备选）
+  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度）
   enableSecondCheck: true,          // 启用二次审核（默认true）
                                     // false时第一级违规直接拒绝，不进行大模型验证
 
@@ -537,7 +548,7 @@ contentModeration: {
   timeout: 10000,                  // 请求超时（毫秒，默认10s）
 
   // 重试策略
-  maxRetries: 3,                   // 最多重试次数（默认3）
+  maxRetries: 3,                   // 单个模型最多重试次数（默认3）
   retryDelay: 1000,                // 初始重试延迟（毫秒，默认1s）
                                    // 实际延迟: 1s, 2s, 3s, ...
 
@@ -556,8 +567,9 @@ CONTENT_MODERATION_API_BASE_URL=https://api.siliconflow.cn
 CONTENT_MODERATION_API_KEY=sk_xxxxx
 
 # 三级审核模型配置
-MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp
-MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct
+MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp           # 默认模型
+MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp   # Pro模型（重试备选）
+MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct  # 高级模型
 MODERATION_ENABLE_SECOND_CHECK=true
 
 # API限制
@@ -565,7 +577,7 @@ CONTENT_MODERATION_MAX_TOKENS=100
 CONTENT_MODERATION_TIMEOUT=10000
 
 # 重试策略
-CONTENT_MODERATION_MAX_RETRIES=3
+CONTENT_MODERATION_MAX_RETRIES=3   # 单个模型重试次数
 CONTENT_MODERATION_RETRY_DELAY=1000
 
 # 故障策略
@@ -574,40 +586,56 @@ CONTENT_MODERATION_FAIL_STRATEGY=fail-close
 
 ## 🚀 最佳实践
 
-### 1. 三级审核的最优配置
+### 1. 模型级联重试的最优配置
 
 ```javascript
-// 推荐配置：成本和精度的最佳平衡
+// 推荐配置：成本、性能和精度的最佳平衡
 contentModeration: {
   enabled: true,
   apiBaseUrl: 'https://api.siliconflow.cn',
   apiKey: 'sk_xxxxx',
 
-  // 三级审核配置
-  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 快速检测
-  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高精度验证
+  // 模型级联配置
+  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 默认模型（快速检测）
+  proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp',    // Pro模型（TPM更大，重试备选）
+  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度验证）
   enableSecondCheck: true,          // 启用二次验证（防止误判）
 
   // 性能配置
   maxTokens: 100,
   timeout: 10000,                   // 10秒超时
-  maxRetries: 3,
+  maxRetries: 3,                    // 每个模型重试3次
   retryDelay: 1000,
   failStrategy: 'fail-close'
 }
 ```
 
-### 2. 监控三级审核的执行情况
+**为什么选择Pro模型作为备选？**
+
+| 特性 | 默认模型 | Pro模型 | 说明 |
+| --- | --- | --- | --- |
+| TPM限制 | 较低 | **更高** | Pro版TPM限制更大，适合高并发 |
+| 响应速度 | 快 | 快 | 两者速度相当 |
+| 成本 | 低 | 稍高 | 仅在需要时使用Pro模型 |
+| 适用场景 | 常规请求 | **限流重试** | 默认模型限流时的最佳选择 |
+
+### 2. 监控模型级联重试的执行情况
 
 ```bash
-# 查看第一级检测的结果
-grep "Phase 1: Moderating user message" logs/claude-relay-*.log
+# 查看默认模型的请求
+grep "Trying Default Model" logs/claude-relay-*.log
 
-# 查看第二级验证的触发情况
-grep "First check BLOCKED" logs/claude-relay-*.log
+# 查看Pro模型的触发情况（说明默认模型遇到限流）
+grep "Trying Pro Model" logs/claude-relay-*.log
 
-# 查看第三级系统提示词审核
-grep "Phase 2: Moderating system prompt" logs/claude-relay-*.log
+# 查看成功的审核及使用的模型
+grep "Moderation succeeded" logs/claude-relay-*.log
+
+# 统计各模型的使用次数
+grep -o "Default Model\|Pro Model" logs/claude-relay-*.log | sort | uniq -c
+
+# 查看API Key切换情况
+grep "Switching to next API Key" logs/claude-relay-*.log
 
 # 统计被拦截的请求
 grep "CONFIRMED violation after second check" logs/claude-relay-*.log | wc -l
@@ -855,6 +883,17 @@ A: 因为：
 
 ## 📋 版本历史
 
+### v2.3.0 (2025-10-27) - 模型级联重试机制
+
+- ✨ 新增Pro模型配置（`proModel`），TPM限制更大
+- ✨ 实现模型级联重试机制：默认模型 → Pro模型 → 下一个API Key
+- ✨ 单个API Key支持多模型重试（默认模型3次 + Pro模型3次）
+- 🚀 提升限流场景下的成功率，自动降级到高TPM模型
+- 📊 优化日志输出，清晰显示当前使用的模型和重试进度
+- 🔧 应对硅基流动TPM限流问题（Pro模型限制更宽松）
+- 📝 完整的模型级联重试文档和最佳实践
+- 🔄 向后兼容：未配置proModel时自动回退到原有逻辑
+
 ### v2.2.0 (2025-10-26) - 上下文感知审核
 
 - ✨ 新增上下文感知审核功能：自动提取最后一条user消息+倒数第一条assistant回复
@@ -897,6 +936,6 @@ A: 因为：
 
 ---
 
-**最后更新**：2025-10-26
-**版本**：2.2.0
+**最后更新**：2025-10-27
+**版本**：2.3.0
 **维护者**：小红帽AI审核团队
