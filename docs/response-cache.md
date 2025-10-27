@@ -121,9 +121,10 @@ TTL：180秒
 #### 1. 请求前检查缓存
 
 ```javascript
-// claudeConsoleRelayService.js:214-232
+// claudeConsoleRelayService.js:270-288
 const isStreamRequest = requestBody.stream === true
-const cacheKey = responseCacheService.generateCacheKey(modifiedRequestBody, mappedModel)
+// ⚠️ 必须传入 apiKeyData.id 确保不同用户的缓存隔离
+const cacheKey = responseCacheService.generateCacheKey(modifiedRequestBody, mappedModel, apiKeyData.id)
 
 if (!isStreamRequest && cacheKey) {
   const cachedResponse = await responseCacheService.getCachedResponse(cacheKey)

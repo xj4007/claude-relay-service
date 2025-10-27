@@ -7,18 +7,6 @@ const unifiedGeminiScheduler = require('../services/unifiedGeminiScheduler')
 const { getAvailableModels } = require('../services/geminiRelayService')
 const crypto = require('crypto')
 
-// 生成会话哈希
-function generateSessionHash(req) {
-  const authSource =
-    req.headers['authorization'] || req.headers['x-api-key'] || req.headers['x-goog-api-key']
-
-  const sessionData = [req.headers['user-agent'], req.ip, authSource?.substring(0, 20)]
-    .filter(Boolean)
-    .join(':')
-
-  return crypto.createHash('sha256').update(sessionData).digest('hex')
-}
-
 // 检查 API Key 权限
 function checkPermissions(apiKeyData, requiredPermission = 'gemini') {
   const permissions = apiKeyData.permissions || 'all'
@@ -279,8 +267,8 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
       geminiRequestBody.systemInstruction = { parts: [{ text: systemInstruction }] }
     }
 
-    // 生成会话哈希用于粘性会话
-    sessionHash = generateSessionHash(req)
+    // 生成会话哈希用于粘性会话 - 使用 sessionHelper 确保用户隔离
+    sessionHash = sessionHelper.generateSessionHash(req.body, apiKeyData.id)
 
     // 选择可用的 Gemini 账户
     try {

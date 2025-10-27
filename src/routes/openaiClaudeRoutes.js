@@ -212,8 +212,8 @@ async function handleChatCompletion(req, res, apiKeyData) {
       }
     }
 
-    // 生成会话哈希用于sticky会话
-    const sessionHash = sessionHelper.generateSessionHash(claudeRequest)
+    // 生成会话哈希用于sticky会话 - 必须包含 apiKeyId 确保用户隔离
+    const sessionHash = sessionHelper.generateSessionHash(claudeRequest, apiKeyData.id)
 
     // 选择可用的Claude账户
     let accountSelection

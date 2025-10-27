@@ -23,7 +23,7 @@ function hasDroidPermission(apiKeyData) {
 // Claude (Anthropic) 端点 - /v1/messages
 router.post('/claude/v1/messages', authenticateApiKey, async (req, res) => {
   try {
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     if (!hasDroidPermission(req.apiKey)) {
       logger.security(

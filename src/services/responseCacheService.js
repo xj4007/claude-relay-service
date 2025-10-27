@@ -22,15 +22,24 @@ class ResponseCacheService {
 
   /**
    * 生成缓存键（基于请求内容的唯一哈希）
+   * ⚠️ 重要：必须包含 API Key ID 以确保用户隔离，防止不同用户共享缓存
+   *
    * @param {Object} requestBody - 请求体
    * @param {string} model - 模型名称
+   * @param {string} apiKeyId - API Key ID (必须传入以确保缓存隔离)
    * @returns {string} - 缓存键
    */
-  generateCacheKey(requestBody, model) {
+  generateCacheKey(requestBody, model, apiKeyId) {
+    if (!apiKeyId) {
+      logger.warn(`⚠️ Cache key generation without apiKeyId - this may cause cache sharing between users!`)
+      return null
+    }
+
     try {
       // 构建缓存键的内容（包含所有影响输出的参数）
       // ⚠️ 必须按固定顺序构建，确保相同内容生成相同哈希
       const cacheContent = {
+        apiKeyId: apiKeyId, // 🔒 首先包含API Key ID确保用户隔离
         model: model,
         messages: requestBody.messages || [],
         system: requestBody.system || '',

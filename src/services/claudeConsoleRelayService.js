@@ -269,7 +269,7 @@ class ClaudeConsoleRelayService {
 
       // 🎯 检查响应缓存（仅非流式请求）
       const isStreamRequest = requestBody.stream === true
-      const cacheKey = responseCacheService.generateCacheKey(modifiedRequestBody, mappedModel)
+      const cacheKey = responseCacheService.generateCacheKey(modifiedRequestBody, mappedModel, apiKeyData.id)
 
       if (!isStreamRequest && cacheKey) {
         const cachedResponse = await responseCacheService.getCachedResponse(cacheKey)

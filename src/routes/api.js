@@ -156,8 +156,8 @@ async function handleMessagesRequest(req, res) {
         res.socket.setNoDelay(true)
       }
 
-      // 生成会话哈希（用于流式请求）
-      const sessionHash = sessionHelper.generateSessionHash(req.body)
+      // 生成会话哈希（用于流式请求） - 必须包含 apiKeyId 确保用户隔离
+      const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
       const requestedModel = req.body.model
 
       // 🔄 流式重试配置
@@ -597,7 +597,7 @@ async function handleMessagesRequest(req, res) {
 
         try {
           // 使用非流式请求作为降级方案（使用retryManager，支持3次重试）
-          const fallbackSessionHash = sessionHelper.generateSessionHash(req.body)
+          const fallbackSessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
           const fallbackRequestedModel = req.body.model
 
           const result = await retryManager.executeWithRetry(
@@ -767,14 +767,14 @@ async function handleMessagesRequest(req, res) {
         apiKeyName: req.apiKey.name
       })
 
-      // 生成会话哈希用于sticky会话
-      const sessionHash = sessionHelper.generateSessionHash(req.body)
+      // 生成会话哈希用于sticky会话 - 必须包含 apiKeyId 确保用户隔离
+      const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
       const requestedModel = req.body.model
 
-      // 生成缓存键
-      const cacheKey = responseCacheService.generateCacheKey(req.body, requestedModel)
+      // 生成缓存键（必须包含 apiKeyId 确保用户隔离）
+      const cacheKey = responseCacheService.generateCacheKey(req.body, requestedModel, req.apiKey.id)
       logger.debug(
-        `📋 Generated cache key: ${cacheKey ? `${cacheKey.substring(0, 16)}...` : 'none'}`
+        `📋 Generated cache key: ${cacheKey ? `${cacheKey.substring(0, 16)}...` : 'none'} | ApiKey: ${req.apiKey.name}`
       )
 
       // 🎯 使用缓存或执行新请求（自动处理请求去重）
@@ -1257,8 +1257,8 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
 
     logger.info(`🔢 Processing token count request for key: ${req.apiKey.name}`)
 
-    // 生成会话哈希用于sticky会话
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    // 生成会话哈希用于sticky会话 - 必须包含 apiKeyId 确保用户隔离
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 选择可用的Claude账户
     const requestedModel = req.body.model

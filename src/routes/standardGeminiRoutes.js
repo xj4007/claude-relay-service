@@ -141,7 +141,7 @@ async function handleStandardGenerateContent(req, res) {
 
     // 从路径参数中获取模型名
     const model = req.params.modelName || 'gemini-2.0-flash-exp'
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 标准 Gemini API 请求体直接包含 contents 等字段
     const { contents, generationConfig, safetySettings, systemInstruction } = req.body
@@ -357,7 +357,7 @@ async function handleStandardStreamGenerateContent(req, res) {
 
     // 从路径参数中获取模型名
     const model = req.params.modelName || 'gemini-2.0-flash-exp'
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 标准 Gemini API 请求体直接包含 contents 等字段
     const { contents, generationConfig, safetySettings, systemInstruction } = req.body

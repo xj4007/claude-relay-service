@@ -5,28 +5,43 @@ class SessionHelper {
   /**
    * 生成会话哈希，用于sticky会话保持
    * 基于Anthropic的prompt caching机制，优先使用metadata中的session ID
+   * ⚠️ 重要：必须包含 API Key ID 确保不同用户的会话隔离
+   *
    * @param {Object} requestBody - 请求体
+   * @param {string} apiKeyId - API Key ID (必须传入以确保会话隔离)
    * @returns {string|null} - 32字符的会话哈希，如果无法生成则返回null
    */
-  generateSessionHash(requestBody) {
+  generateSessionHash(requestBody, apiKeyId = null) {
     if (!requestBody || typeof requestBody !== 'object') {
       return null
     }
 
-    // 1. 最高优先级：使用metadata中的session ID（直接使用，无需hash）
+    // 🔒 如果没有提供 apiKeyId，记录警告但继续（向后兼容，但不推荐）
+    if (!apiKeyId) {
+      logger.warn(`⚠️ Session hash generation without apiKeyId - this may cause session sharing between users!`)
+    }
+
+    // 1. 最高优先级：使用metadata中的session ID（加上 apiKeyId 前缀）
     if (requestBody.metadata && requestBody.metadata.user_id) {
       // 提取 session_xxx 部分
       const userIdString = requestBody.metadata.user_id
       const sessionMatch = userIdString.match(/session_([a-f0-9-]{36})/)
       if (sessionMatch && sessionMatch[1]) {
         const sessionId = sessionMatch[1]
-        // 直接返回session ID
-        logger.debug(`📋 Session ID extracted from metadata.user_id: ${sessionId}`)
-        return sessionId
+        // 🔒 拼接 apiKeyId 确保用户隔离
+        const isolatedSessionId = apiKeyId ? `${apiKeyId}_${sessionId}` : sessionId
+        // 如果拼接后超过32字符，对整个字符串hash
+        if (isolatedSessionId.length > 32) {
+          const hash = crypto.createHash('sha256').update(isolatedSessionId).digest('hex').substring(0, 32)
+          logger.debug(`📋 Session ID extracted from metadata.user_id (hashed with apiKeyId): ${hash}`)
+          return hash
+        }
+        logger.debug(`📋 Session ID extracted from metadata.user_id: ${isolatedSessionId}`)
+        return isolatedSessionId
       }
     }
 
-    let cacheableContent = ''
+    let cacheableContent = apiKeyId || ''
     const system = requestBody.system || ''
     const messages = requestBody.messages || []
 

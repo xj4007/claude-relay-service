@@ -11,16 +11,6 @@ const apiKeyService = require('../services/apiKeyService')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 // const { OAuth2Client } = require('google-auth-library'); // OAuth2Client is not used in this file
 
-// 生成会话哈希
-function generateSessionHash(req) {
-  const apiKeyPrefix =
-    req.headers['x-api-key']?.substring(0, 10) || req.headers['x-goog-api-key']?.substring(0, 10)
-
-  const sessionData = [req.headers['user-agent'], req.ip, apiKeyPrefix].filter(Boolean).join(':')
-
-  return crypto.createHash('sha256').update(sessionData).digest('hex')
-}
-
 // 检查 API Key 权限
 function checkPermissions(apiKeyData, requiredPermission = 'gemini') {
   const permissions = apiKeyData.permissions || 'all'
@@ -109,8 +99,8 @@ router.post('/messages', authenticateApiKey, async (req, res) => {
       })
     }
 
-    // 生成会话哈希用于粘性会话
-    const sessionHash = generateSessionHash(req)
+    // 生成会话哈希用于粘性会话 - 使用 sessionHelper 确保用户隔离
+    const sessionHash = sessionHelper.generateSessionHash(req.body, apiKeyData.id)
 
     // 使用统一调度选择可用的 Gemini 账户（传递请求的模型）
     let accountId
@@ -356,7 +346,7 @@ async function handleLoadCodeAssist(req, res) {
       return undefined
     }
 
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 从路径参数或请求体中获取模型名
     const requestedModel = req.body.model || req.params.modelName || 'gemini-2.5-flash'
@@ -441,7 +431,7 @@ async function handleOnboardUser(req, res) {
 
     // 提取请求参数
     const { tierId, cloudaicompanionProject, metadata } = req.body
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 从路径参数或请求体中获取模型名
     const requestedModel = req.body.model || req.params.modelName || 'gemini-2.5-flash'
@@ -535,7 +525,7 @@ async function handleCountTokens(req, res) {
     const { contents } = requestData
     // 从路径参数或请求体中获取模型名
     const model = requestData.model || req.params.modelName || 'gemini-2.5-flash'
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 验证必需参数
     if (!contents || !Array.isArray(contents)) {
@@ -600,7 +590,7 @@ async function handleGenerateContent(req, res) {
     const { project, user_prompt_id, request: requestData } = req.body
     // 从路径参数或请求体中获取模型名
     const model = req.body.model || req.params.modelName || 'gemini-2.5-flash'
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 处理不同格式的请求
     let actualRequestData = requestData
@@ -758,7 +748,7 @@ async function handleStreamGenerateContent(req, res) {
     const { project, user_prompt_id, request: requestData } = req.body
     // 从路径参数或请求体中获取模型名
     const model = req.body.model || req.params.modelName || 'gemini-2.5-flash'
-    const sessionHash = sessionHelper.generateSessionHash(req.body)
+    const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
 
     // 处理不同格式的请求
     let actualRequestData = requestData
