@@ -552,9 +552,7 @@ class ClaudeRelayService {
       const claudeCodePrompt = {
         type: 'text',
         text: this.claudeCodeSystemPrompt
-        // cache_control: {
-        //   type: 'ephemeral'
-        // }
+        // ❌ 不添加 cache_control，保持简洁
       }
 
       if (processedBody.system) {
@@ -595,13 +593,12 @@ class ClaudeRelayService {
       }
     }
 
-    this._enforceCacheControlLimit(processedBody)
-
     // 处理原有的系统提示（如果配置了）
     if (this.systemPrompt && this.systemPrompt.trim()) {
       const systemPrompt = {
         type: 'text',
         text: this.systemPrompt
+        // ❌ 不添加 cache_control，保持简洁
       }
 
       // 经过上面的处理，system 现在应该总是数组格式
@@ -740,107 +737,6 @@ class ClaudeRelayService {
           processContentArray(message.content)
         }
       })
-    }
-  }
-
-  // ⚖️ 限制带缓存控制的内容数量
-  _enforceCacheControlLimit(body) {
-    const MAX_CACHE_CONTROL_BLOCKS = 4
-
-    if (!body || typeof body !== 'object') {
-      return
-    }
-
-    const countCacheControlBlocks = () => {
-      let total = 0
-
-      if (Array.isArray(body.messages)) {
-        body.messages.forEach((message) => {
-          if (!message || !Array.isArray(message.content)) {
-            return
-          }
-          message.content.forEach((item) => {
-            if (item && item.cache_control) {
-              total += 1
-            }
-          })
-        })
-      }
-
-      if (Array.isArray(body.system)) {
-        body.system.forEach((item) => {
-          if (item && item.cache_control) {
-            total += 1
-          }
-        })
-      }
-
-      return total
-    }
-
-    const removeFromMessages = () => {
-      if (!Array.isArray(body.messages)) {
-        return false
-      }
-
-      for (let messageIndex = 0; messageIndex < body.messages.length; messageIndex += 1) {
-        const message = body.messages[messageIndex]
-        if (!message || !Array.isArray(message.content)) {
-          continue
-        }
-
-        for (let contentIndex = 0; contentIndex < message.content.length; contentIndex += 1) {
-          const contentItem = message.content[contentIndex]
-          if (contentItem && contentItem.cache_control) {
-            message.content.splice(contentIndex, 1)
-
-            if (message.content.length === 0) {
-              body.messages.splice(messageIndex, 1)
-            }
-
-            return true
-          }
-        }
-      }
-
-      return false
-    }
-
-    const removeFromSystem = () => {
-      if (!Array.isArray(body.system)) {
-        return false
-      }
-
-      for (let index = 0; index < body.system.length; index += 1) {
-        const systemItem = body.system[index]
-        if (systemItem && systemItem.cache_control) {
-          body.system.splice(index, 1)
-
-          if (body.system.length === 0) {
-            delete body.system
-          }
-
-          return true
-        }
-      }
-
-      return false
-    }
-
-    let total = countCacheControlBlocks()
-
-    while (total > MAX_CACHE_CONTROL_BLOCKS) {
-      if (removeFromMessages()) {
-        total -= 1
-        continue
-      }
-
-      if (removeFromSystem()) {
-        total -= 1
-        continue
-      }
-
-      break
     }
   }
 
@@ -1117,6 +1013,18 @@ class ClaudeRelayService {
           address: error.address,
           port: error.port
         })
+
+        // 🔒 如果配置了代理但连接失败，记录警告
+        if (proxyAgent) {
+          logger.error(
+            `🚨 [PROXY FAILURE] Request failed with proxy configured! Account: ${accountId}`,
+            {
+              errorCode: error.code,
+              errorMessage: error.message,
+              proxyInfo: account?.proxy ? ProxyHelper.maskProxyInfo(account.proxy) : 'N/A'
+            }
+          )
+        }
 
         // 根据错误类型提供更具体的错误信息
         let errorMessage = 'Upstream request failed'
