@@ -84,21 +84,21 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     }
 
     try {
-      // 提取最后一条用户消息
-      const userMessage = this._extractLastUserMessage(requestBody)
+      // 提取最后一条用户消息及其前一条Assistant回复（带上下文）
+      const userMessageWithContext = this._extractLastUserMessageWithContext(requestBody)
       // 提取所有系统消息
       const systemMessages = this._extractSystemMessages(requestBody)
 
       // 如果用户消息为空，直接通过
-      if (!userMessage || userMessage.trim().length === 0) {
+      if (!userMessageWithContext || userMessageWithContext.trim().length === 0) {
         logger.warn('⚠️ No user message found for moderation')
         return { passed: true }
       }
 
-      logger.info(`🔍 Phase 1: Moderating user message with ${this.model}`)
+      logger.info(`🔍 Phase 1: Moderating user message (with context) using ${this.model}`)
 
       // ========== 第一阶段：用户消息审核（小模型） ==========
-      const firstResult = await this._callModerationAPIWithRetry(userMessage, this.model)
+      const firstResult = await this._callModerationAPIWithRetry(userMessageWithContext, this.model)
 
       // 情况1：API调用失败 - Fail-Close 策略
       if (!firstResult.success) {
@@ -119,7 +119,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
           )
 
           const secondResult = await this._callModerationAPIWithRetry(
-            userMessage,
+            userMessageWithContext,
             this.advancedModel
           )
 
@@ -330,6 +330,74 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     }
 
     return ''
+  }
+
+  /**
+   * 提取最后一条用户消息及其前一条Assistant回复（带上下文）
+   * @param {Object} requestBody - Claude API 请求体
+   * @returns {string}
+   */
+  _extractLastUserMessageWithContext(requestBody) {
+    if (!requestBody.messages || !Array.isArray(requestBody.messages)) {
+      return ''
+    }
+
+    let lastUserMessage = ''
+    let lastAssistantMessage = ''
+    let userMessageIndex = -1
+
+    // 倒序查找最后一条用户消息
+    for (let i = requestBody.messages.length - 1; i >= 0; i--) {
+      const message = requestBody.messages[i]
+      if (message.role === 'user' && userMessageIndex === -1) {
+        // 处理不同类型的 content
+        if (typeof message.content === 'string') {
+          lastUserMessage = message.content
+        } else if (Array.isArray(message.content)) {
+          // 提取文本内容（支持多模态）
+          const textContents = message.content
+            .filter((item) => item.type === 'text')
+            .map((item) => item.text)
+          lastUserMessage = textContents.join('\n')
+        }
+        userMessageIndex = i
+        break
+      }
+    }
+
+    // 如果找到了用户消息,继续向前��assistant消息
+    if (userMessageIndex > 0) {
+      for (let i = userMessageIndex - 1; i >= 0; i--) {
+        const message = requestBody.messages[i]
+        if (message.role === 'assistant') {
+          // 处理不同类型的 content
+          if (typeof message.content === 'string') {
+            lastAssistantMessage = message.content
+          } else if (Array.isArray(message.content)) {
+            // 提取文本内容
+            const textContents = message.content
+              .filter((item) => item.type === 'text')
+              .map((item) => item.text)
+            lastAssistantMessage = textContents.join('\n')
+          }
+          break
+        }
+      }
+    }
+
+    // 组合上下文
+    if (lastAssistantMessage) {
+      // 限制assistant消息长度(避免token过多),取最后1000字符
+      const truncatedAssistant =
+        lastAssistantMessage.length > 1000
+          ? '...' + lastAssistantMessage.slice(-1000)
+          : lastAssistantMessage
+
+      return `Assistant: ${truncatedAssistant}\n\nUser: ${lastUserMessage}`
+    }
+
+    // 如果没有assistant消息,直接返回用户消息
+    return lastUserMessage
   }
 
   /**
