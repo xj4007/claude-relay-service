@@ -199,7 +199,7 @@ const config = {
     })(),
     // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认模型（第一次审核，小模型）
+    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Coder-30B-A3B-Instruct', // 默认模型（第一次审核，小模型）
     proModel: process.env.MODERATION_PRO_MODEL || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，用于重试时的备选）
     advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（第二次审核，大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
@@ -207,8 +207,12 @@ const config = {
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
     // 🔄 重试配置
     maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 单个模型最多重试3次
-    retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 5000, // 重试间隔1秒（会递增）
-    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close' // fail-close（失败拒绝） 或 fail-open（失败放行）
+    retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 5000, // 重试间隔5秒（会递增到10秒）
+    // 🚨 失败策略配置（当所有API Key和模型都失败时的行为）
+    // - 'fail-close'（默认，推荐）: 审核服务不可用时拒绝请求，确保安全但可能误杀正常用户
+    // - 'fail-open': 审核服务不可用时放行请求，避免误杀但安全性降低
+    // 建议：生产环境优先使用 fail-close，如果审核服务经常不稳定可临时切换为 fail-open
+    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close'
   },
 
   // 🛠️ 开发配置

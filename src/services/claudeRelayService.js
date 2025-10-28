@@ -1251,6 +1251,10 @@ class ClaudeRelayService {
     requestPayload = extensionResult.body
     finalHeaders = extensionResult.headers
 
+    // 🔧 客户端连接状态标志位
+    let clientDisconnected = false
+    let dataStreamStarted = false
+
     return new Promise((resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
 
@@ -1525,9 +1529,13 @@ class ClaudeRelayService {
                 const transformed = streamTransformer(linesToForward)
                 if (transformed) {
                   responseStream.write(transformed)
+                  // 🔧 标记数据流已经开始发送给客户端
+                  dataStreamStarted = true
                 }
               } else {
                 responseStream.write(linesToForward)
+                // 🔧 标记数据流已经开始发送给客户端
+                dataStreamStarted = true
               }
             }
 
@@ -1732,8 +1740,16 @@ class ClaudeRelayService {
               )
             }
 
-            // 调用一次usageCallback记录合并后的数据
-            usageCallback(finalUsage)
+            // 🔧 只在客户端成功接收数据流后才记录usage并扣费
+            if (dataStreamStarted && !clientDisconnected) {
+              logger.info('✅ Client successfully received data stream, recording usage')
+              // 调用一次usageCallback记录合并后的数据
+              usageCallback(finalUsage)
+            } else {
+              logger.warn(
+                `⚠️ Client disconnected or no data sent (dataStreamStarted=${dataStreamStarted}, clientDisconnected=${clientDisconnected}), skipping usage recording to prevent charging for failed requests`
+              )
+            }
           }
 
           // 提取5小时会话窗口状态
@@ -1907,7 +1923,11 @@ class ClaudeRelayService {
 
       // 处理客户端断开连接
       responseStream.on('close', () => {
-        logger.debug('🔌 Client disconnected, cleaning up stream')
+        // 🔧 标记客户端已断开
+        clientDisconnected = true
+        logger.debug(
+          `🔌 Client disconnected, cleaning up stream (dataStreamStarted=${dataStreamStarted})`
+        )
         if (!req.destroyed) {
           req.destroy()
         }

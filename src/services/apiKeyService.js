@@ -1074,10 +1074,60 @@ class ApiKeyService {
   ) {
     try {
       // 提取 token 数量
-      const inputTokens = usageObject.input_tokens || 0
-      const outputTokens = usageObject.output_tokens || 0
-      const cacheCreateTokens = usageObject.cache_creation_input_tokens || 0
-      const cacheReadTokens = usageObject.cache_read_input_tokens || 0
+      let inputTokens = usageObject.input_tokens || 0
+      let outputTokens = usageObject.output_tokens || 0
+      let cacheCreateTokens = usageObject.cache_creation_input_tokens || 0
+      let cacheReadTokens = usageObject.cache_read_input_tokens || 0
+
+      // 🎯 anyrouter账户特殊计费：只有命中缓存时才应用优化
+      // 条件：有缓存命中(cache_read > 0) + 有缓存创建(cache_creation > 0) + anyrouter账户
+      if (accountId && cacheReadTokens > 0 && cacheCreateTokens > 0) {
+        try {
+          let account = null
+          if (accountType === 'claude-console') {
+            const claudeConsoleAccountService = require('./claudeConsoleAccountService')
+            account = await claudeConsoleAccountService.getAccount(accountId)
+          } else if (accountType === 'claude-official') {
+            const claudeAccountService = require('./claudeAccountService')
+            account = await claudeAccountService.getAccount(accountId)
+          }
+
+          if (account?.name?.includes('anyrouter-anyrouter')) {
+            // 🎲 随机转换比例：60-90% (保留10-40%的cache_creation以显示真实性)
+            const conversionRatio = Math.random() * 0.3 + 0.6 // 0.6-0.9
+            const tokensToConvert = Math.floor(cacheCreateTokens * conversionRatio)
+            const tokensToKeep = cacheCreateTokens - tokensToConvert
+
+            logger.info(
+              `💰 [anyrouter优化计费] 账户"${account.name}"命中缓存(${cacheReadTokens} tokens)，随机转换${tokensToConvert}创建tokens(${Math.round(conversionRatio * 100)}%)为读取计费，保留${tokensToKeep}创建tokens (1.25x → 0.1x)`
+            )
+
+            // 转换：部分缓存创建 → 缓存读取
+            usageObject.cache_read_input_tokens = cacheReadTokens + tokensToConvert
+            usageObject.cache_creation_input_tokens = tokensToKeep
+
+            // 如果有详细的cache_creation数据，按比例调整
+            if (usageObject.cache_creation && typeof usageObject.cache_creation === 'object') {
+              const ephemeral5m = usageObject.cache_creation.ephemeral_5m_input_tokens || 0
+              const ephemeral1h = usageObject.cache_creation.ephemeral_1h_input_tokens || 0
+
+              if (ephemeral5m > 0 || ephemeral1h > 0) {
+                // 按相同比例保留详细数据
+                usageObject.cache_creation = {
+                  ephemeral_5m_input_tokens: Math.floor(ephemeral5m * (1 - conversionRatio)),
+                  ephemeral_1h_input_tokens: Math.floor(ephemeral1h * (1 - conversionRatio))
+                }
+              }
+            }
+
+            // 重新提取修改后的值
+            cacheCreateTokens = tokensToKeep
+            cacheReadTokens = usageObject.cache_read_input_tokens
+          }
+        } catch (err) {
+          logger.warn(`⚠️ anyrouter特殊计费检查失败: ${err.message}`)
+        }
+      }
 
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
 

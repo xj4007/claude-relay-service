@@ -69,7 +69,36 @@ export const useApiStatsStore = defineStore('apistats', () => {
       }
     }
 
-    // 单个 Key 模式下使用原有逻辑
+    // 单个 Key 模式下直接从 modelStats 计算（确保与模型使用统计显示一致）
+    if (modelStats.value && modelStats.value.length > 0) {
+      const summary = {
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreateTokens: 0,
+        cacheReadTokens: 0,
+        allTokens: 0,
+        cost: 0,
+        formattedCost: '$0.000000'
+      }
+
+      modelStats.value.forEach((model) => {
+        summary.requests += model.requests || 0
+        summary.inputTokens += model.inputTokens || 0
+        summary.outputTokens += model.outputTokens || 0
+        summary.cacheCreateTokens += model.cacheCreateTokens || 0
+        summary.cacheReadTokens += model.cacheReadTokens || 0
+        summary.allTokens += model.allTokens || 0
+        // 确保 costs.total 是数字类型
+        const costValue = typeof model.costs?.total === 'number' ? model.costs.total : 0
+        summary.cost += costValue
+      })
+
+      summary.formattedCost = formatCost(summary.cost)
+      return summary
+    }
+
+    // 回退逻辑：使用原有的缓存数据
     if (statsPeriod.value === 'total') {
       return totalStats.value || defaultData
     } else if (statsPeriod.value === 'daily') {
