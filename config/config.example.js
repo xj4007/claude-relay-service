@@ -199,12 +199,14 @@ const config = {
     })(),
     // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Coder-30B-A3B-Instruct', // 默认模型（第一次审核，小模型）
+    model: process.env.MODERATION_MODEL || 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认模型（第一次审核，小模型）
     proModel: process.env.MODERATION_PRO_MODEL || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，用于重试时的备选）
     advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（第二次审核，大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
+    // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗和TPM压力）
+    maxContentLength: parseInt(process.env.MODERATION_MAX_CONTENT_LENGTH) || 1000,
     // 🔄 重试配置
     maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 单个模型最多重试3次
     retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 5000, // 重试间隔5秒（会递增到10秒）

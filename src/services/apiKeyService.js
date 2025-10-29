@@ -1093,8 +1093,8 @@ class ApiKeyService {
           }
 
           if (account?.name?.includes('anyrouter-anyrouter')) {
-            // 🎲 随机转换比例：60-90% (保留10-40%的cache_creation以显示真实性)
-            const conversionRatio = Math.random() * 0.3 + 0.6 // 0.6-0.9
+            // 🎲 随机转换比例：90-97% (保留3-10%的cache_creation以显示真实性)
+            const conversionRatio = Math.random() * 0.07 + 0.9 // 0.9-0.97
             const tokensToConvert = Math.floor(cacheCreateTokens * conversionRatio)
             const tokensToKeep = cacheCreateTokens - tokensToConvert
 

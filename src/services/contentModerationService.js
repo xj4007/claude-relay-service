@@ -21,8 +21,7 @@ class ContentModerationService {
     this.advancedModel =
       config.contentModeration?.advancedModel || 'deepseek-ai/DeepSeek-V3.1-Terminus'
     // 🚀 Pro模型配置（TPM更大，用于重试时的备选模型）
-    this.proModel =
-      config.contentModeration?.proModel || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp'
+    this.proModel = config.contentModeration?.proModel || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp'
     this.enableSecondCheck = config.contentModeration?.enableSecondCheck !== false
     this.maxTokens = config.contentModeration?.maxTokens || 100
     this.timeout = config.contentModeration?.timeout || 10000
@@ -31,6 +30,9 @@ class ContentModerationService {
     this.maxRetries = config.contentModeration?.maxRetries || 3
     this.retryDelay = config.contentModeration?.retryDelay || 1000
     this.failStrategy = config.contentModeration?.failStrategy || 'fail-close'
+
+    // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗）
+    this.maxContentLength = config.contentModeration?.maxContentLength || 1000
 
     // 📊 记录每个Key的使用情况
     this.keyStats = this.apiKeys.map((key, index) => ({
@@ -47,6 +49,7 @@ class ContentModerationService {
       this.keyStats.forEach((stat) => {
         logger.info(`   - Key ${stat.index + 1}: ${stat.keyPrefix}`)
       })
+      logger.info(`✂️ Content truncation enabled: max ${this.maxContentLength} characters`)
     }
 
     // 🛡️ 审核系统提示词（严格版：默认拒绝，仅对明确编程场景放行）
@@ -246,10 +249,10 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       logger.error('❌ Content moderation error:', error)
       // 🔴 异常情况 - 根据failStrategy决定策略
       if (this.failStrategy === 'fail-open') {
+        logger.warn('⚠️ Exception in moderation, but using FAIL-OPEN strategy, ALLOWING request')
         logger.warn(
-          '⚠️ Exception in moderation, but using FAIL-OPEN strategy, ALLOWING request'
+          '   Reason: Unexpected error in moderation service, allowing request to proceed'
         )
-        logger.warn('   Reason: Unexpected error in moderation service, allowing request to proceed')
         return { passed: true }
       } else {
         // fail-close 策略（默认）
@@ -272,6 +275,27 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       return '***'
     }
     return `${key.substring(0, 6)}...${key.substring(key.length - 4)}`
+  }
+
+  /**
+   * ✂️ 截断内容（如果超过最大长度）
+   * @param {string} content - 原始内容
+   * @returns {string} 截断后的内容
+   */
+  _truncateContent(content) {
+    if (!content) {
+      return ''
+    }
+
+    if (content.length <= this.maxContentLength) {
+      return content
+    }
+
+    const truncated = content.substring(0, this.maxContentLength)
+    logger.info(
+      `✂️ Content truncated from ${content.length} to ${this.maxContentLength} characters`
+    )
+    return truncated
   }
 
   /**
@@ -335,7 +359,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
-   * 提取最后一条用户消息
+   * 提取最后一条用户消息（自动截断超长内容）
    * @param {Object} requestBody - Claude API 请求体
    * @returns {string}
    */
@@ -348,16 +372,21 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     for (let i = requestBody.messages.length - 1; i >= 0; i--) {
       const message = requestBody.messages[i]
       if (message.role === 'user') {
+        let content = ''
+
         // 处理不同类型的 content
         if (typeof message.content === 'string') {
-          return message.content
+          content = message.content
         } else if (Array.isArray(message.content)) {
           // 提取文本内容（支持多模态）
           const textContents = message.content
             .filter((item) => item.type === 'text')
             .map((item) => item.text)
-          return textContents.join('\n')
+          content = textContents.join('\n')
         }
+
+        // ✂️ 截断超长内容
+        return this._truncateContent(content)
       }
     }
 
@@ -365,7 +394,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
   }
 
   /**
-   * 提取最后两条用户消息（倒数第二条 + 最后一条，合并）
+   * 提取最后两条用户消息（倒数第二条 + 最后一条，合并，自动截断）
    * @param {Object} requestBody - Claude API 请求体
    * @returns {string}
    */
@@ -403,21 +432,22 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       }
     }
 
-    // 如果只有一条消息，直接返回
+    // 如果只有一条消息，截断后返回
     if (userMessages.length === 1) {
-      return userMessages[0]
+      return this._truncateContent(userMessages[0])
     }
 
-    // 如果有两条消息，倒序合并（倒数第二条在前，最后一条在后）
+    // 如果有两条消息，倒序合并（倒数第二条在前，最后一条在后），然后截断
     if (userMessages.length === 2) {
-      return `${userMessages[1]}\n\n${userMessages[0]}`
+      const combined = `${userMessages[1]}\n\n${userMessages[0]}`
+      return this._truncateContent(combined)
     }
 
     return ''
   }
 
   /**
-   * 提取最后一条用户消息（不再包含 Assistant 回复，避免 token 过大导致 TPM 超限）
+   * 提取最后一条用户消息（不再包含 Assistant 回复，避免 token 过大导致 TPM 超限，自动截断）
    * @param {Object} requestBody - Claude API 请求体
    * @returns {string}
    */
@@ -430,16 +460,21 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     for (let i = requestBody.messages.length - 1; i >= 0; i--) {
       const message = requestBody.messages[i]
       if (message.role === 'user') {
+        let content = ''
+
         // 处理不同类型的 content
         if (typeof message.content === 'string') {
-          return message.content
+          content = message.content
         } else if (Array.isArray(message.content)) {
           // 提取文本内容（支持多模态）
           const textContents = message.content
             .filter((item) => item.type === 'text')
             .map((item) => item.text)
-          return textContents.join('\n')
+          content = textContents.join('\n')
         }
+
+        // ✂️ 截断超长内容
+        return this._truncateContent(content)
       }
     }
 
@@ -518,9 +553,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       )
 
       // 🚀 模型级联重试策略（如果有modelOverride则跳过级联）
-      const modelsToTry = modelOverride
-        ? [modelOverride]
-        : [this.model, this.proModel] // 默认模型 → Pro模型
+      const modelsToTry = modelOverride ? [modelOverride] : [this.model, this.proModel] // 默认模型 → Pro模型
 
       let modelIndex = 0
       for (const currentModel of modelsToTry) {
@@ -602,9 +635,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     const totalAttempts = modelOverride
       ? totalKeys * this.maxRetries
       : totalKeys * 2 * this.maxRetries // 2个模型
-    logger.error(
-      `❌ All ${totalKeys} API Key(s) exhausted. Total attempts: ${totalAttempts}`
-    )
+    logger.error(`❌ All ${totalKeys} API Key(s) exhausted. Total attempts: ${totalAttempts}`)
     return { success: false }
   }
 
@@ -814,9 +845,9 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       logger.warn(JSON.stringify(logEntry, null, 2))
 
       // 📋 额外输出更易读的格式（方便快速核查）
-      logger.warn('=' .repeat(80))
+      logger.warn('='.repeat(80))
       logger.warn('📋 NSFW Violation Summary:')
-      logger.warn('=' .repeat(80))
+      logger.warn('='.repeat(80))
       logger.warn(`⏰ Timestamp: ${logEntry.timestamp}`)
       logger.warn(`🔑 API Key: ${logEntry.apiKey}`)
       logger.warn(`🆔 Key ID: ${logEntry.keyId}`)
@@ -835,7 +866,7 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         logger.warn('-'.repeat(80))
       })
 
-      logger.warn('=' .repeat(80))
+      logger.warn('='.repeat(80))
     } catch (error) {
       logger.error('❌ Failed to log NSFW violation:', error)
     }
@@ -855,7 +886,6 @@ ${sensitiveWords && sensitiveWords.length > 0 ? `检测到敏感词汇：[${sens
 提示：在Claude Code终端中按ESC+ESC， 返回上次输入进行修改。多次输入违规内容将导致账号被自动封禁。感谢您的理解与配合！`
     return baseMessage
   }
-
 }
 
 module.exports = new ContentModerationService()
