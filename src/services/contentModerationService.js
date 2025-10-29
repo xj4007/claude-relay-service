@@ -34,6 +34,13 @@ class ContentModerationService {
     // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗）
     this.maxContentLength = config.contentModeration?.maxContentLength || 1000
 
+    // 🔥 熔断机制配置：检测到故障后自动停用审核一段时间
+    this.circuitBreakerEnabled = config.contentModeration?.circuitBreakerEnabled !== false
+    this.circuitBreakerDuration =
+      config.contentModeration?.circuitBreakerDuration || 5 * 60 * 1000 // 默认5分钟
+    this.circuitBreakerTripped = false // 熔断器是否触发
+    this.circuitBreakerTrippedAt = null // 熔断触发时间
+
     // 📊 记录每个Key的使用情况
     this.keyStats = this.apiKeys.map((key, index) => ({
       index,
@@ -50,6 +57,11 @@ class ContentModerationService {
         logger.info(`   - Key ${stat.index + 1}: ${stat.keyPrefix}`)
       })
       logger.info(`✂️ Content truncation enabled: max ${this.maxContentLength} characters`)
+      if (this.circuitBreakerEnabled) {
+        logger.info(
+          `🔥 Circuit breaker enabled: will disable moderation for ${this.circuitBreakerDuration / 1000}s on failure`
+        )
+      }
     }
 
     // 🛡️ 审核系统提示词（严格版：默认拒绝，仅对明确编程场景放行）
@@ -89,6 +101,15 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       return { passed: true }
     }
 
+    // 🔥 熔断器检查：如果熔断器已触发，直接放行所有请求
+    if (this.circuitBreakerEnabled && this._isCircuitBreakerTripped()) {
+      const remainingTime = this._getCircuitBreakerRemainingTime()
+      logger.warn(
+        `🔥 Circuit breaker is ACTIVE, bypassing moderation (${Math.ceil(remainingTime / 1000)}s remaining)`
+      )
+      return { passed: true }
+    }
+
     try {
       // 提取最后一条用户消息
       const lastUserMessage = this._extractLastUserMessage(requestBody)
@@ -106,8 +127,11 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       // ========== 第一阶段：最后一次用户输入审核（启用模型级联：默认模型 → Pro模型） ==========
       const firstResult = await this._callModerationAPIWithRetry(lastUserMessage, null)
 
-      // 情况1：API调用失败 - 根据failStrategy决定策略
+      // 情况1：API调用失败 - 触发熔断器并根据failStrategy决定策略
       if (!firstResult.success) {
+        // 🔥 触发熔断器：检测到审核服务故障
+        this._tripCircuitBreaker()
+
         if (this.failStrategy === 'fail-open') {
           logger.warn(
             '⚠️ Phase 1 moderation API failed after all retries, but using FAIL-OPEN strategy, ALLOWING request'
@@ -155,8 +179,11 @@ IF NO programming keywords found → ALWAYS BLOCK.`
           // ========== 第二阶段：倒数两次用户输入合并审核 ==========
           const secondResult = await this._callModerationAPIWithRetry(lastTwoMessages, null)
 
-          // 第二次API调用失败 - 根据failStrategy决定策略
+          // 第二次API调用失败 - 触发熔断器并根据failStrategy决定策略
           if (!secondResult.success) {
+            // 🔥 触发熔断器
+            this._tripCircuitBreaker()
+
             if (this.failStrategy === 'fail-open') {
               logger.warn(
                 '⚠️ Phase 2 moderation API failed, but using FAIL-OPEN strategy, ALLOWING request'
@@ -200,8 +227,11 @@ IF NO programming keywords found → ALWAYS BLOCK.`
           this.advancedModel
         )
 
-        // 第三次API调用失败 - 根据failStrategy决定策略
+        // 第三次API调用失败 - 触发熔断器并根据failStrategy决定策略
         if (!finalResult.success) {
+          // 🔥 触发熔断器
+          this._tripCircuitBreaker()
+
           if (this.failStrategy === 'fail-open') {
             logger.warn(
               '⚠️ Phase 3 (advanced model) failed, but using FAIL-OPEN strategy, ALLOWING request'
@@ -247,6 +277,9 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       return { passed: true }
     } catch (error) {
       logger.error('❌ Content moderation error:', error)
+      // 🔥 触发熔断器：异常情况也算作故障
+      this._tripCircuitBreaker()
+
       // 🔴 异常情况 - 根据failStrategy决定策略
       if (this.failStrategy === 'fail-open') {
         logger.warn('⚠️ Exception in moderation, but using FAIL-OPEN strategy, ALLOWING request')
@@ -263,6 +296,68 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         }
       }
     }
+  }
+
+  /**
+   * 🔥 触发熔断器（检测到审核服务故障）
+   */
+  _tripCircuitBreaker() {
+    if (!this.circuitBreakerEnabled) {
+      return
+    }
+
+    if (!this.circuitBreakerTripped) {
+      this.circuitBreakerTripped = true
+      this.circuitBreakerTrippedAt = Date.now()
+      logger.error(
+        `🔥 CIRCUIT BREAKER TRIPPED! Moderation service disabled for ${this.circuitBreakerDuration / 1000}s`
+      )
+      logger.error('   All subsequent requests will BYPASS moderation until circuit breaker resets')
+    }
+  }
+
+  /**
+   * 🔥 检查熔断器是否已触发
+   * @returns {boolean}
+   */
+  _isCircuitBreakerTripped() {
+    if (!this.circuitBreakerTripped) {
+      return false
+    }
+
+    const elapsed = Date.now() - this.circuitBreakerTrippedAt
+    if (elapsed >= this.circuitBreakerDuration) {
+      // 熔断器超时，自动重置
+      this._resetCircuitBreaker()
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * 🔥 重置熔断器
+   */
+  _resetCircuitBreaker() {
+    if (this.circuitBreakerTripped) {
+      logger.info('🔥 Circuit breaker RESET, moderation service re-enabled')
+      this.circuitBreakerTripped = false
+      this.circuitBreakerTrippedAt = null
+    }
+  }
+
+  /**
+   * 🔥 获取熔断器剩余时间（毫秒）
+   * @returns {number}
+   */
+  _getCircuitBreakerRemainingTime() {
+    if (!this.circuitBreakerTripped) {
+      return 0
+    }
+
+    const elapsed = Date.now() - this.circuitBreakerTrippedAt
+    const remaining = this.circuitBreakerDuration - elapsed
+    return Math.max(0, remaining)
   }
 
   /**

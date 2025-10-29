@@ -124,7 +124,7 @@ module.exports = {
     timeout: 10000, // 超时时间（毫秒）
 
     // ✂️ 内容截断配置（v2.3.0新增）
-    maxContentLength: 1000, // 截取前1000字符进行审核（减少token消耗和TPM压力）
+    maxContentLength: 100, // 截取前100字符进行审核（减少token消耗和TPM压力）
 
     // 重试配置
     maxRetries: 3, // 单个模型最多重试次数
@@ -191,7 +191,7 @@ MODERATION_ENABLE_SECOND_CHECK=true
 CONTENT_MODERATION_MAX_TOKENS=100
 CONTENT_MODERATION_TIMEOUT=10000
 # ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗和TPM压力）
-MODERATION_MAX_CONTENT_LENGTH=1000
+MODERATION_MAX_CONTENT_LENGTH=100
 CONTENT_MODERATION_MAX_RETRIES=3          # 单个模型重试次数
 CONTENT_MODERATION_RETRY_DELAY=1000
 CONTENT_MODERATION_FAIL_STRATEGY=fail-close
@@ -201,7 +201,7 @@ CONTENT_MODERATION_FAIL_STRATEGY=fail-close
 
 ### 功能说明
 
-为了减少 token 消耗和 TPM 压力，系统会自动截取用户输入内容的前 N 字符（默认 1000）进行审核。
+为了减少 token 消耗和 TPM 压力，系统会自动截取用户输入内容的前 N 字符（默认 100）进行审核。
 
 ### 工作原理
 
@@ -217,7 +217,7 @@ CONTENT_MODERATION_FAIL_STRATEGY=fail-close
 
 3. **准确性保持**：
    - 大多数违规内容出现在消息开头
-   - 1000 字符足以覆盖绝大多数技术讨论场景
+   - 100 字符足以快速检测违规关键词
    - 如需更长，可调整 `MODERATION_MAX_CONTENT_LENGTH`
 
 ### 配置示例
@@ -225,7 +225,7 @@ CONTENT_MODERATION_FAIL_STRATEGY=fail-close
 ```javascript
 contentModeration: {
   enabled: true,
-  maxContentLength: 1000, // 默认1000字符
+  maxContentLength: 100, // 默认100字符
   // 其他配置...
 }
 ```
@@ -233,14 +233,14 @@ contentModeration: {
 或环境变量：
 
 ```bash
-MODERATION_MAX_CONTENT_LENGTH=2000  # 调整为2000字符
+MODERATION_MAX_CONTENT_LENGTH=200  # 调整为200字符
 ```
 
 ### 日志示例
 
 ```
 🔍 Phase 1: Moderating last user message using Qwen/Qwen3-Coder-30B-A3B-Instruct
-✂️ Content truncated from 3500 to 1000 characters
+✂️ Content truncated from 3500 to 100 characters
 🔑 Using API Key 1/2: sk-abc...xyz
 📥 Moderation API (Qwen/Qwen3-Coder-30B-A3B-Instruct) responded in 450ms
 ✅ Phase 1: User message passed moderation, allowing request

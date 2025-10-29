@@ -199,14 +199,14 @@ const config = {
     })(),
     // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认模型（第一次审核，小模型）
+    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Coder-30B-A3B-Instruct', // 默认模型（第一次审核，小模型）
     proModel: process.env.MODERATION_PRO_MODEL || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，用于重试时的备选）
     advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（第二次审核，大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
     // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗和TPM压力）
-    maxContentLength: parseInt(process.env.MODERATION_MAX_CONTENT_LENGTH) || 1000,
+    maxContentLength: parseInt(process.env.MODERATION_MAX_CONTENT_LENGTH) || 100,
     // 🔄 重试配置
     maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 单个模型最多重试3次
     retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 5000, // 重试间隔5秒（会递增到10秒）
@@ -214,7 +214,15 @@ const config = {
     // - 'fail-close'（默认，推荐）: 审核服务不可用时拒绝请求，确保安全但可能误杀正常用户
     // - 'fail-open': 审核服务不可用时放行请求，避免误杀但安全性降低
     // 建议：生产环境优先使用 fail-close，如果审核服务经常不稳定可临时切换为 fail-open
-    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close'
+    failStrategy: process.env.MODERATION_FAIL_STRATEGY || 'fail-close',
+    // 🔥 熔断机制配置（检测到审核服务故障后自动停用一段时间，避免每次请求都等待超时）
+    // - circuitBreakerEnabled: 是否启用熔断机制（默认true）
+    // - circuitBreakerDuration: 熔断持续时间（毫秒），默认5分钟（300000ms）
+    // 工作原理：一旦检测到审核API调用失败（任意阶段），立即触发熔断器，
+    //         在接下来的circuitBreakerDuration时间内，所有请求将直接跳过审核，避免重复等待超时。
+    //         超过时间后熔断器自动重置，恢复正常审核。
+    circuitBreakerEnabled: process.env.MODERATION_CIRCUIT_BREAKER_ENABLED !== 'false', // 默认启用
+    circuitBreakerDuration: parseInt(process.env.MODERATION_CIRCUIT_BREAKER_DURATION) || 300000 // 5分钟
   },
 
   // 🛠️ 开发配置
