@@ -192,6 +192,11 @@ function isStreamRetryableError(error) {
     return false // 明确返回 false，立即停止重试
   }
 
+  // 🚫 检查参数错误：extra inputs are not permitted（客户端参数格式错误，不可重试）
+  if (errorMessage.includes('extra inputs are not permitted')) {
+    return false // 客户端参数错误，不重试
+  }
+
   const responseData = error.response?.data
   if (responseData) {
     let responseText = ''
@@ -207,6 +212,11 @@ function isStreamRetryableError(error) {
 
     if (responseText.includes('prompt is too long')) {
       return false // 明确返回 false，立即停止重试
+    }
+
+    // 🚫 检查响应数据中的参数错误
+    if (responseText.includes('extra inputs are not permitted')) {
+      return false // 客户端参数错误，不重试
     }
   }
   if (

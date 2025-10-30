@@ -32,6 +32,11 @@ class RetryManager {
       if (errorMessage.includes('prompt is too long')) {
         return false // 明确返回 false，不重试
       }
+
+      // 🚫 检查参数错误：extra inputs are not permitted（客户端参数格式错误，不可重试）
+      if (errorMessage.includes('extra inputs are not permitted')) {
+        return false // 客户端参数错误，不重试
+      }
     }
 
     // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
@@ -134,6 +139,12 @@ class RetryManager {
       const promptTooLongError = normalizedText.includes('prompt is too long')
       if (promptTooLongError) {
         return null // 返回 null，表示不需要切换账户（让调用方直接返回错误）
+      }
+
+      // 🚫 检查参数错误：extra inputs are not permitted（客户端参数格式错误，不需要切换账户）
+      const extraInputsError = normalizedText.includes('extra inputs are not permitted')
+      if (extraInputsError) {
+        return null // 客户端参数错误，不需要切换账户
       }
     }
 
