@@ -54,8 +54,14 @@ class RequestQueue {
       // 等待第一个请求完成
       const result = await pending.promise
 
+      // 🔒 标记为共享响应，防止重复记录usage
+      // 第一个请求已经记录了usage，等待的请求不应该再次记录
+      if (result && typeof result === 'object') {
+        result.isSharedResponse = true
+      }
+
       logger.info(
-        `✅ Shared result delivered to waiting request | CacheKey: ${cacheKey.substring(0, 16)}...`
+        `✅ Shared result delivered to waiting request (marked as shared) | CacheKey: ${cacheKey.substring(0, 16)}...`
       )
 
       return result

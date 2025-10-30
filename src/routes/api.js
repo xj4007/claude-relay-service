@@ -1010,8 +1010,9 @@ async function handleMessagesRequest(req, res) {
 
         logger.info('📊 Parsed upstream response:', JSON.stringify(jsonData, null, 2))
 
-        // 🔒 只有非缓存响应才记录usage（防止缓存命中重复扣费）
+        // 🔒 检查是否应该跳过usage记录（防止重复扣费）
         const isCachedResponse = response.cachedAt && response.cachedAt > 0
+        const isSharedResponse = response.isSharedResponse === true
 
         if (isCachedResponse) {
           logger.info(
@@ -1019,9 +1020,16 @@ async function handleMessagesRequest(req, res) {
           )
         }
 
+        if (isSharedResponse) {
+          logger.info(
+            '🔄 Response from request deduplication, skipping usage recording (already recorded by first request)'
+          )
+        }
+
         // 从响应中提取usage信息（完整的token分类体系）
         if (
           !isCachedResponse &&
+          !isSharedResponse &&
           jsonData.usage &&
           jsonData.usage.input_tokens !== undefined &&
           jsonData.usage.output_tokens !== undefined
@@ -1063,7 +1071,7 @@ async function handleMessagesRequest(req, res) {
           logger.api(
             `📊 Non-stream usage recorded - Model: ${model}, Input: ${inputTokens}, Output: ${outputTokens}, Cache Create: ${cacheCreateTokens}, Cache Read: ${cacheReadTokens}, Total: ${inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens} tokens`
           )
-        } else if (!isCachedResponse) {
+        } else if (!isCachedResponse && !isSharedResponse) {
           logger.warn('⚠️ No usage data found in response')
         }
 
