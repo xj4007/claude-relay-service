@@ -224,6 +224,14 @@ async function handleMessagesRequest(req, res) {
               res,
               req.headers,
               (usageData) => {
+                // 🔒 防重复扣费检查
+                if (usageDataCaptured) {
+                  logger.warn(
+                    '⚠️ Usage already captured, skipping duplicate record to prevent double charging'
+                  )
+                  return
+                }
+
                 // 回调函数：当检测到完整usage数据时记录真实token使用量
                 logger.info(
                   '🎯 Usage callback triggered with complete data:',
@@ -315,6 +323,14 @@ async function handleMessagesRequest(req, res) {
               res,
               req.headers,
               (usageData) => {
+                // 🔒 防重复扣费检查
+                if (usageDataCaptured) {
+                  logger.warn(
+                    '⚠️ Usage already captured, skipping duplicate record to prevent double charging'
+                  )
+                  return
+                }
+
                 // 回调函数：当检测到完整usage数据时记录真实token使用量
                 logger.info(
                   '🎯 Usage callback triggered with complete data:',
@@ -466,6 +482,14 @@ async function handleMessagesRequest(req, res) {
               res,
               req.headers,
               (usageData) => {
+                // 🔒 防重复扣费检查
+                if (usageDataCaptured) {
+                  logger.warn(
+                    '⚠️ Usage already captured, skipping duplicate record to prevent double charging'
+                  )
+                  return
+                }
+
                 // 回调函数：当检测到完整usage数据时记录真实token使用量
                 logger.info(
                   '🎯 CCR usage callback triggered with complete data:',
@@ -772,7 +796,11 @@ async function handleMessagesRequest(req, res) {
       const requestedModel = req.body.model
 
       // 生成缓存键（必须包含 apiKeyId 确保用户隔离）
-      const cacheKey = responseCacheService.generateCacheKey(req.body, requestedModel, req.apiKey.id)
+      const cacheKey = responseCacheService.generateCacheKey(
+        req.body,
+        requestedModel,
+        req.apiKey.id
+      )
       logger.debug(
         `📋 Generated cache key: ${cacheKey ? `${cacheKey.substring(0, 16)}...` : 'none'} | ApiKey: ${req.apiKey.name}`
       )
@@ -982,8 +1010,18 @@ async function handleMessagesRequest(req, res) {
 
         logger.info('📊 Parsed upstream response:', JSON.stringify(jsonData, null, 2))
 
+        // 🔒 只有非缓存响应才记录usage（防止缓存命中重复扣费）
+        const isCachedResponse = response.cachedAt && response.cachedAt > 0
+
+        if (isCachedResponse) {
+          logger.info(
+            '💾 Response from cache, skipping usage recording to prevent duplicate charging'
+          )
+        }
+
         // 从响应中提取usage信息（完整的token分类体系）
         if (
+          !isCachedResponse &&
           jsonData.usage &&
           jsonData.usage.input_tokens !== undefined &&
           jsonData.usage.output_tokens !== undefined
@@ -1025,7 +1063,7 @@ async function handleMessagesRequest(req, res) {
           logger.api(
             `📊 Non-stream usage recorded - Model: ${model}, Input: ${inputTokens}, Output: ${outputTokens}, Cache Create: ${cacheCreateTokens}, Cache Read: ${cacheReadTokens}, Total: ${inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens} tokens`
           )
-        } else {
+        } else if (!isCachedResponse) {
           logger.warn('⚠️ No usage data found in response')
         }
 
