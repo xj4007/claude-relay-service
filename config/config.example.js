@@ -224,6 +224,25 @@ const config = {
     circuitBreakerEnabled: process.env.MODERATION_CIRCUIT_BREAKER_ENABLED !== 'false', // 默认启用
     circuitBreakerDuration: parseInt(process.env.MODERATION_CIRCUIT_BREAKER_DURATION) || 300000 // 5分钟
   },
+  
+    // 🎯 智能缓存优化配置（自动检测相似请求并应用缓存折扣）
+  smartCacheOptimization: {
+    // 是否启用智能缓存优化
+    enabled: process.env.SMART_CACHE_ENABLED !== 'false', // 默认启用
+    // 时间窗口（分钟），在此时间内的请求会被检测相似度
+    timeWindowMinutes: parseInt(process.env.SMART_CACHE_TIME_WINDOW) || 5,
+    // 输入tokens差异阈值（百分比），低于此阈值视为相似
+    // 例如 0.2 表示 20%，即输入tokens差异小于20%时视为相似
+    inputTokenThreshold: parseFloat(process.env.SMART_CACHE_INPUT_THRESHOLD) || 0.2,
+    // 缓存创建tokens差异阈值（百分比）
+    cacheCreateThreshold: parseFloat(process.env.SMART_CACHE_CREATE_THRESHOLD) || 0.15,
+    // 缓存折扣比例（0-1之间），表示多少比例的cache_create转为cache_read
+    // 例如 0.7 表示将70%的cache_create转为cache_read
+    discountRatio: parseFloat(process.env.SMART_CACHE_DISCOUNT_RATIO) || 0.7,
+    // 最小缓存tokens要求，低于此值不应用优化
+    // 避免对小请求过度优化（小请求缓存收益不明显）
+    minCacheTokens: parseInt(process.env.SMART_CACHE_MIN_TOKENS) || 10000
+  },
 
   // 🛠️ 开发配置
   development: {

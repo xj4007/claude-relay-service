@@ -31,6 +31,206 @@
 - ✅ 分页导航
 - ✅ 统计信息面板
 
+### 4. 智能缓存优化 🎯
+
+**功能概述**：
+
+智能缓存优化是一项自动成本优化功能，专为那些缓存创建成本高但难以命中缓存的账户（如 anyrouter、Console 等）设计。通过检测相似请求并自动应用"缓存折扣"，大幅降低用户成本。
+
+**核心特性**：
+
+- ✅ 自动检测相似请求（5分钟时间窗口）
+- ✅ 智能缓存折扣（70% cache_create 转为 cache_read）
+- ✅ 成本节省 60-80%（针对大缓存请求）
+- ✅ 交易日志完整记录优化信息
+- ✅ 仅对有缓存创建的请求生效（不影响其他请求）
+- ✅ 透明优化，无需修改客户端代码
+
+**工作原理**：
+
+1. **请求记录**：每个请求的 token 使用情况会记录到 Redis（最近 5 分钟）
+2. **相似度检测**：新请求到达时，检测是否存在相似的历史请求
+   - 输入 tokens 差异 < 20%
+   - 缓存创建 tokens 差异 < 15%
+3. **Token 转换**：如果检测到相似请求，将 70% 的 `cache_create` 转为 `cache_read`
+4. **成本计算**：由于 `cache_read` 价格是 `cache_create` 的 1/10，可节省约 63% 成本
+5. **日志记录**：优化信息完整记录到交易日志，包含原始值和优化后值
+
+**适用场景**：
+
+- anyrouter 账户（缓存创建高，但缓存命中率低）
+- Claude Console 账户（大量 cache_create tokens）
+- 持续对话场景（相似请求频繁）
+- 代码编辑场景（增量修改请求）
+
+**触发条件**：
+
+- ✅ `cache_create` ≥ 10,000 tokens（可配置）
+- ✅ `cache_read` = 0（未命中缓存）
+- ✅ 5 分钟内有相似请求（可配置）
+- ✅ 输入 tokens 差异 ≤ 20%（可配置）
+- ✅ 缓存创建 tokens 差异 ≤ 15%（可配置）
+- ❌ 无缓存创建的请求不会触发
+- ❌ 已命中缓存的请求不需要优化
+
+**配置参数**（`config/config.js`）：
+
+```javascript
+smartCacheOptimization: {
+  // 是否启用智能缓存优化（默认：true）
+  enabled: process.env.SMART_CACHE_ENABLED !== 'false',
+
+  // 时间窗口（分钟）：在此时间内的请求会被检测相似度（默认：5）
+  timeWindowMinutes: parseInt(process.env.SMART_CACHE_TIME_WINDOW) || 5,
+
+  // 输入tokens差异阈值（百分比）：低于此阈值视为相似（默认：0.2 = 20%）
+  inputTokenThreshold: parseFloat(process.env.SMART_CACHE_INPUT_THRESHOLD) || 0.2,
+
+  // 缓存创建tokens差异阈值（百分比）（默认：0.15 = 15%）
+  cacheCreateThreshold: parseFloat(process.env.SMART_CACHE_CREATE_THRESHOLD) || 0.15,
+
+  // 缓存折扣比例（0-1之间）：多少比例的cache_create转为cache_read（默认：0.7 = 70%）
+  discountRatio: parseFloat(process.env.SMART_CACHE_DISCOUNT_RATIO) || 0.7,
+
+  // 最小缓存tokens要求：低于此值不应用优化（默认：10000）
+  minCacheTokens: parseInt(process.env.SMART_CACHE_MIN_TOKENS) || 10000
+}
+```
+
+**Redis 数据结构**：
+
+```redis
+# Key 格式
+recent_requests:{keyId}
+
+# 数据类型
+List（Redis LPUSH + LTRIM）
+
+# 数据内容
+[
+  {
+    "timestamp": 1698765432000,
+    "inputTokens": 5000,
+    "outputTokens": 2000,
+    "cacheCreateTokens": 118000,
+    "cacheReadTokens": 0,
+    "model": "claude-sonnet-4-5-20250929"
+  },
+  ...
+]
+
+# 保留策略
+- 只保留最近 10 条记录（LTRIM 0 9）
+- TTL：5 分钟（timeWindowMinutes * 60 秒）
+```
+
+**成本节省计算**：
+
+```javascript
+// 假设：
+// - cache_create: 118,000 tokens
+// - cache_read: 0 tokens
+// - 检测到相似请求
+
+// 优化前：
+// cache_create 成本 = 118,000 * (价格_create)
+
+// 优化后（70% 转换）：
+// tokens_converted = 118,000 * 0.7 = 82,600 tokens
+// cache_create 成本 = 35,400 * (价格_create)
+// cache_read 成本 = 82,600 * (价格_read) = 82,600 * (价格_create / 10)
+
+// 节省比例：
+// savings = (1 - 0.1) * 0.7 = 0.63 = 63%
+```
+
+**实际使用示例**：
+
+**场景 1：anyrouter 账户持续对话**
+
+```
+请求 1（23:05:10）：
+- input: 5000 tokens
+- cache_create: 118000 tokens
+- cache_read: 0 tokens
+- 成本：$0.48
+→ 记录到 recent_requests
+
+请求 2（23:05:22，12秒后）：
+- input: 5200 tokens (差异：4%)
+- cache_create: 120000 tokens (差异：1.7%)
+- cache_read: 0 tokens
+→ 检测到相似请求！
+→ 应用智能缓存优化：
+  - 原始：cache_create=120000, cache_read=0
+  - 优化：cache_create=36000, cache_read=84000
+  - 节省：63%
+- 优化后成本：$0.18（节省 $0.30）
+```
+
+**交易日志显示**：
+
+```json
+{
+  "timestamp": 1698765522000,
+  "model": "claude-sonnet-4-5-20250929",
+  "inputTokens": 5200,
+  "outputTokens": 2100,
+  "cacheCreateTokens": 36000, // ✅ 优化后的值
+  "cacheReadTokens": 84000, // ✅ 优化后的值
+  "cost": 0.18, // ✅ 优化后的成本
+  "remainingQuota": 19.82,
+  "cacheOptimized": true, // 🎯 优化标记
+  "originalCacheCreate": 120000, // 📋 原始值
+  "originalCacheRead": 0, // 📋 原始值
+  "tokensConverted": 84000, // 📊 转换的 token 数量
+  "savingsPercent": 63 // 💰 节省百分比
+}
+```
+
+**日志示例**：
+
+```log
+[2025-10-30 23:05:10] INFO: 📝 Recorded recent request for key: 12345678...
+[2025-10-30 23:05:22] DEBUG: 🎯 Found similar request | Time diff: 12s | Input diff: 4.00% | Cache diff: 1.70%
+[2025-10-30 23:05:22] INFO: 🎯 Smart cache optimization applied | Key: 12345678... | Original: cache_create=120000, cache_read=0 | Optimized: cache_create=36000, cache_read=84000 | Savings: 63%
+```
+
+**如何在交易日志中查看优化效果**：
+
+1. 打开 Web 管理界面的"交易明细"页面
+2. 查找带有优化标记的记录（如果前端支持，会有特殊图标）
+3. 检查以下字段：
+   - `cacheOptimized: true` - 表示此请求被优化
+   - `originalCacheCreate` vs `cacheCreateTokens` - 对比原始值和优化值
+   - `savingsPercent` - 查看节省百分比
+4. 对比同一会话内的多个请求，查看成本降低效果
+
+**禁用智能缓存优化**：
+
+如果需要禁用此功能，可以在 `.env` 文件中设置：
+
+```bash
+SMART_CACHE_ENABLED=false
+```
+
+或在 `config/config.js` 中修改：
+
+```javascript
+smartCacheOptimization: {
+  enabled: false,
+  // ...
+}
+```
+
+**注意事项**：
+
+1. **仅针对 cache_create 请求**：如果请求没有 cache_create tokens，优化不会触发
+2. **缓存命中自动跳过**：如果请求已经命中缓存（cache_read > 0），无需优化
+3. **最小阈值保护**：只有 cache_create ≥ 10,000 tokens 的请求才会被优化，避免小请求的计算开销
+4. **不影响实际 API 调用**：优化仅影响成本计算和记录，不会修改实际发送给上游的请求
+5. **透明给用户**：用户无需修改任何代码，优化自动生效
+
 ---
 
 ## 📂 相关文件
@@ -206,6 +406,255 @@ async recordUsage(keyId, inputTokens, outputTokens, ...) {
 
 - `recordUsageWithDetails`: [src/services/apiKeyService.js:1107-1243](../src/services/apiKeyService.js#L1107-L1243)
 - `recordUsage`: [src/services/apiKeyService.js:917-1036](../src/services/apiKeyService.js#L917-L1036)
+
+---
+
+#### 4. `src/services/smartCacheOptimizer.js`
+
+**新增服务**：智能缓存优化服务（310 行）
+
+**核心功能**：
+
+智能缓存优化服务负责检测相似请求并自动应用缓存折扣，是交易日志功能的重要扩展。
+
+**主要方法**：
+
+1. **`checkAndOptimize(keyId, currentRequest)`** - 主入口函数
+
+   ```javascript
+   async checkAndOptimize(keyId, currentRequest) {
+     // 1. 检查是否启用
+     if (!this.config.enabled) return null
+
+     // 2. 验证必要参数
+     const { inputTokens, cacheCreateTokens, cacheReadTokens, model } = currentRequest
+     if (!inputTokens || !cacheCreateTokens || typeof cacheReadTokens === 'undefined' || !model) {
+       return null
+     }
+
+     // 3. 跳过已命中缓存的请求
+     if (cacheReadTokens > 0) {
+       return null
+     }
+
+     // 4. 检查缓存创建tokens是否达到阈值
+     if (cacheCreateTokens < this.config.minCacheTokens) {
+       return null
+     }
+
+     // 5. 查找最近的相似请求
+     const recentRequest = await this._findSimilarRecentRequest(
+       keyId, inputTokens, cacheCreateTokens, model
+     )
+
+     if (!recentRequest) {
+       // 没有找到相似请求，记录当前请求
+       await this._recordRecentRequest(keyId, currentRequest)
+       return null
+     }
+
+     // 6. 应用缓存优化
+     const optimized = this._applyCacheOptimization(currentRequest, recentRequest)
+
+     // 7. 记录当前请求
+     await this._recordRecentRequest(keyId, currentRequest)
+
+     return optimized
+   }
+   ```
+
+2. **`_findSimilarRecentRequest(keyId, inputTokens, cacheCreateTokens, model)`** - 查找相似请求
+
+   ```javascript
+   async _findSimilarRecentRequest(keyId, inputTokens, cacheCreateTokens, model) {
+     const client = redis.getClientSafe()
+     const key = `${this.RECENT_REQUESTS_KEY_PREFIX}${keyId}`
+
+     // 获取最近的请求（最多10条）
+     const recentLogs = await client.lrange(key, 0, 9)
+
+     for (const logStr of recentLogs) {
+       const log = JSON.parse(logStr)
+
+       // 模型必须相同
+       if (log.model !== model) continue
+
+       // 检查时间窗口（5分钟内）
+       const timeDiff = Date.now() - log.timestamp
+       if (timeDiff > this.config.timeWindowMinutes * 60 * 1000) continue
+
+       // 计算相似度
+       const similarity = this._calculateSimilarity(
+         inputTokens, cacheCreateTokens,
+         log.inputTokens, log.cacheCreateTokens
+       )
+
+       if (similarity.isSimilar) {
+         return log
+       }
+     }
+
+     return null
+   }
+   ```
+
+3. **`_calculateSimilarity(input1, cache1, input2, cache2)`** - 计算相似度
+
+   ```javascript
+   _calculateSimilarity(input1, cache1, input2, cache2) {
+     // 计算输入tokens差异百分比
+     const inputDiff = Math.abs(input1 - input2) / Math.max(input1, input2)
+
+     // 计算缓存创建tokens差异百分比
+     const cacheDiff = Math.abs(cache1 - cache2) / Math.max(cache1, cache2)
+
+     // 判断是否相似
+     const isSimilar =
+       inputDiff <= this.config.inputTokenThreshold &&
+       cacheDiff <= this.config.cacheCreateThreshold
+
+     return {
+       isSimilar,
+       inputDiff: inputDiff * 100,  // 转为百分比
+       cacheDiff: cacheDiff * 100   // 转为百分比
+     }
+   }
+   ```
+
+4. **`_applyCacheOptimization(currentRequest, recentRequest)`** - 应用缓存优化
+
+   ```javascript
+   _applyCacheOptimization(currentRequest, recentRequest) {
+     const { inputTokens, outputTokens, cacheCreateTokens, cacheReadTokens, model } = currentRequest
+
+     // 计算应该转换为cache_read的tokens数量
+     const tokensToConvert = Math.floor(cacheCreateTokens * this.config.discountRatio)
+
+     // 优化后的tokens分配
+     const optimizedCacheCreate = cacheCreateTokens - tokensToConvert
+     const optimizedCacheRead = cacheReadTokens + tokensToConvert
+
+     // 计算节省比例（cache_read价格是cache_create的1/10）
+     const savingsPercent = Math.floor((1 - 0.1) * this.config.discountRatio * 100)
+
+     return {
+       // 优化后的tokens
+       inputTokens,
+       outputTokens,
+       cacheCreateTokens: optimizedCacheCreate,
+       cacheReadTokens: optimizedCacheRead,
+
+       // 原始tokens（用于日志）
+       originalCacheCreate: cacheCreateTokens,
+       originalCacheRead: cacheReadTokens,
+
+       // 优化元数据
+       optimized: true,
+       tokensConverted: tokensToConvert,
+       savingsPercent,
+       similarRequestTimestamp: recentRequest.timestamp,
+       optimizationReason: 'similar_request_detected',
+
+       // 模型信息
+       model
+     }
+   }
+   ```
+
+5. **`_recordRecentRequest(keyId, request)`** - 记录最近的请求
+
+   ```javascript
+   async _recordRecentRequest(keyId, request) {
+     const client = redis.getClientSafe()
+     const key = `${this.RECENT_REQUESTS_KEY_PREFIX}${keyId}`
+
+     const requestLog = {
+       timestamp: Date.now(),
+       inputTokens: request.inputTokens,
+       outputTokens: request.outputTokens,
+       cacheCreateTokens: request.cacheCreateTokens,
+       cacheReadTokens: request.cacheReadTokens,
+       model: request.model
+     }
+
+     // 添加到列表头部
+     await client.lpush(key, JSON.stringify(requestLog))
+
+     // 只保留最近10条记录
+     await client.ltrim(key, 0, 9)
+
+     // 设置TTL
+     await client.expire(key, this.RECENT_REQUESTS_TTL)
+   }
+   ```
+
+6. **`getOptimizationStats(keyId = null)`** - 获取优化统计信息
+
+   ```javascript
+   async getOptimizationStats(keyId = null) {
+     const client = redis.getClientSafe()
+     const pattern = keyId
+       ? `${this.RECENT_REQUESTS_KEY_PREFIX}${keyId}`
+       : `${this.RECENT_REQUESTS_KEY_PREFIX}*`
+
+     const keys = await client.keys(pattern)
+
+     return {
+       enabled: this.config.enabled,
+       timeWindowMinutes: this.config.timeWindowMinutes,
+       discountRatio: this.config.discountRatio,
+       trackedKeys: keys.length,
+       minCacheTokens: this.config.minCacheTokens
+     }
+   }
+   ```
+
+**数据流程**：
+
+```
+1. API请求到达
+   ↓
+2. apiKeyService.recordUsage() 被调用
+   ↓
+3. 调用 smartCacheOptimizer.checkAndOptimize()
+   ├─ 检查启用状态和参数
+   ├─ 查询 Redis 获取最近请求
+   ├─ 遍历最近请求，计算相似度
+   ├─ 如果找到相似请求：应用优化
+   └─ 记录当前请求到 Redis
+   ↓
+4. 返回优化结果（或 null）
+   ↓
+5. apiKeyService 使用优化后的 tokens 计算成本
+   ↓
+6. 记录交易日志（包含优化元数据）
+```
+
+**性能优化**：
+
+- **Redis List + LTRIM**: 只保留最近 10 条记录，避免数据膨胀
+- **TTL 自动过期**: 5 分钟后自动清理，无需手动维护
+- **早期返回**: 多个检查点提前返回，避免不必要的计算
+- **异步处理**: 记录请求不阻塞主流程
+
+**错误处理**：
+
+- 所有错误都被捕获并记录日志
+- 出错时返回 `null`，不影响主流程
+- 确保即使优化失败，也能正常记录 usage
+
+**日志输出**：
+
+```log
+⚠️ Smart cache: Missing required parameters, skipping optimization
+✅ Smart cache: Already has cache_read (15606), no optimization needed
+⚠️ Smart cache: cache_create (8000) below minimum threshold (10000), skipping
+📝 Smart cache: No similar request found, recorded current request
+🎯 Found similar request | Time diff: 12s | Input diff: 4.00% | Cache diff: 1.70%
+🎯 Smart cache optimization applied | Key: 12345678... | Original: cache_create=120000, cache_read=0 | Optimized: cache_create=36000, cache_read=84000 | Savings: 63%
+```
+
+**文件位置**: [src/services/smartCacheOptimizer.js](../src/services/smartCacheOptimizer.js)
 
 ---
 
@@ -823,6 +1272,31 @@ sum(transactionLogs.cost) ≈ 统计数据.currentTotalCost  // 对于 12h 内
     - `src/routes/api.js` (第 1015, 1030-1073 行)
   - **结果**：1 个上游请求现在只记录 1 次 usage，杜绝 N 倍扣费
 - ✅ 完善文档：添加 Bug 3 详细说明和代码流程分析
+- ✅ 新增智能缓存优化功能 🎯
+  - **背景**：anyrouter 等账户缓存创建成本高，但缓存命中率低，导致高额费用
+  - **实现**：
+    - 新增 `src/services/smartCacheOptimizer.js` 服务（310行）
+    - 配置文件 `config/config.js` 增加 `smartCacheOptimization` 配置项
+    - 修改 `src/services/apiKeyService.js` 集成智能缓存优化
+    - 交易日志数据结构扩展，支持优化元数据（`cacheOptimized`、`originalCacheCreate` 等）
+  - **功能特性**：
+    - 自动检测 5 分钟内的相似请求（输入 tokens 差异 < 20%，缓存差异 < 15%）
+    - 自动将 70% 的 `cache_create` 转为 `cache_read`（价格降低 90%）
+    - 成本节省约 63%（针对大缓存请求）
+    - 完整的优化元数据记录到交易日志
+    - 透明优化，无需修改客户端代码
+  - **配置参数**：
+    - `SMART_CACHE_ENABLED`: 启用/禁用（默认启用）
+    - `SMART_CACHE_TIME_WINDOW`: 时间窗口（分钟，默认 5）
+    - `SMART_CACHE_INPUT_THRESHOLD`: 输入差异阈值（默认 0.2 = 20%）
+    - `SMART_CACHE_CREATE_THRESHOLD`: 缓存差异阈值（默认 0.15 = 15%）
+    - `SMART_CACHE_DISCOUNT_RATIO`: 折扣比例（默认 0.7 = 70%）
+    - `SMART_CACHE_MIN_TOKENS`: 最小缓存 tokens（默认 10000）
+  - **Redis 数据**：
+    - Key: `recent_requests:{keyId}`
+    - 类型: List（LPUSH + LTRIM）
+    - 保留: 最近 10 条，TTL 5 分钟
+  - **结果**：大幅降低 anyrouter 等账户的使用成本，提升用户体验
 
 ### 2025-10-20
 

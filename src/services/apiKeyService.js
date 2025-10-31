@@ -893,6 +893,33 @@ class ApiKeyService {
     accountId = null
   ) {
     try {
+      // 🎯 智能缓存优化：检测相似请求并应用缓存折扣
+      let cacheOptimizationInfo = null
+      const smartCacheOptimizer = require('./smartCacheOptimizer')
+      const optimizationResult = await smartCacheOptimizer.checkAndOptimize(keyId, {
+        inputTokens,
+        outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        model
+      })
+
+      if (optimizationResult) {
+        // 使用优化后的tokens
+        cacheCreateTokens = optimizationResult.cacheCreateTokens
+        cacheReadTokens = optimizationResult.cacheReadTokens
+        cacheOptimizationInfo = {
+          optimized: true,
+          originalCacheCreate: optimizationResult.originalCacheCreate,
+          originalCacheRead: optimizationResult.originalCacheRead,
+          tokensConverted: optimizationResult.tokensConverted,
+          savingsPercent: optimizationResult.savingsPercent
+        }
+        logger.info(
+          `💡 Smart cache: Applied optimization to key ${keyId.substring(0, 8)}... | Savings: ${optimizationResult.savingsPercent}%`
+        )
+      }
+
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
 
       // 计算费用
@@ -1006,7 +1033,7 @@ class ApiKeyService {
 
       // 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
       try {
-        await redis.addTransactionLog(keyId, {
+        const transactionLogData = {
           model,
           inputTokens,
           outputTokens,
@@ -1014,7 +1041,18 @@ class ApiKeyService {
           cacheReadTokens,
           cost: costInfo.costs.total || 0,
           remainingQuota: remainingQuotaAfterCharge
-        })
+        }
+
+        // 🎯 如果应用了智能缓存优化，添加优化信息
+        if (cacheOptimizationInfo) {
+          transactionLogData.cacheOptimized = true
+          transactionLogData.originalCacheCreate = cacheOptimizationInfo.originalCacheCreate
+          transactionLogData.originalCacheRead = cacheOptimizationInfo.originalCacheRead
+          transactionLogData.tokensConverted = cacheOptimizationInfo.tokensConverted
+          transactionLogData.savingsPercent = cacheOptimizationInfo.savingsPercent
+        }
+
+        await redis.addTransactionLog(keyId, transactionLogData)
       } catch (logError) {
         logger.error(`❌ Failed to add transaction log for key ${keyId}:`, logError)
         logger.error(`   Error details:`, logError.stack)
@@ -1028,6 +1066,9 @@ class ApiKeyService {
         logParts.push(`Cache Read: ${cacheReadTokens}`)
       }
       logParts.push(`Total: ${totalTokens} tokens`)
+      if (cacheOptimizationInfo) {
+        logParts.push(`💡 Smart Cache Optimized (${cacheOptimizationInfo.savingsPercent}% savings)`)
+      }
 
       logger.database(`📊 Recorded usage: ${keyId} - ${logParts.join(', ')}`)
     } catch (error) {
