@@ -31,7 +31,9 @@ class ResponseCacheService {
    */
   generateCacheKey(requestBody, model, apiKeyId) {
     if (!apiKeyId) {
-      logger.warn(`⚠️ Cache key generation without apiKeyId - this may cause cache sharing between users!`)
+      logger.warn(
+        `⚠️ Cache key generation without apiKeyId - this may cause cache sharing between users!`
+      )
       return null
     }
 
@@ -165,6 +167,16 @@ class ResponseCacheService {
       )
       // 🔄 重新执行请求（带重试逻辑），不共享失败结果
       return await fetchFn()
+    }
+
+    // 🔒 IMPORTANT: 如果 result 被标记为共享响应，需要将此标记传递到 result.response
+    // requestQueue 会给 result 对象设置 isSharedResponse=true，但我们返回的是 result.response
+    // 所以需要将标记复制到实际返回的对象上，防止重复记录 usage
+    if (result.isSharedResponse === true && result.response) {
+      result.response.isSharedResponse = true
+      logger.debug(
+        `🔒 Transferred isSharedResponse flag to response object | CacheKey: ${cacheKey.substring(0, 16)}...`
+      )
     }
 
     return result.response

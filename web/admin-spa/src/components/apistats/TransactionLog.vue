@@ -216,6 +216,31 @@
         </div>
       </div>
     </div>
+
+    <!-- 扣费异常提示 -->
+    <div
+      v-if="transactionLogs && transactionLogs.length > 0"
+      class="mt-4 rounded-lg border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-amber-50 p-4 dark:border-orange-700 dark:from-orange-950/40 dark:to-amber-950/40"
+    >
+      <div class="flex items-start gap-3">
+        <div class="flex-shrink-0">
+          <i
+            class="fas fa-exclamation-triangle text-lg text-orange-500 dark:text-orange-400 md:text-xl"
+          />
+        </div>
+        <div class="flex-1">
+          <h4 class="mb-1 text-sm font-semibold text-orange-900 dark:text-orange-200 md:text-base">
+            <i class="fas fa-user-headset mr-1" />
+            扣费异常处理
+          </h4>
+          <p class="text-xs leading-relaxed text-orange-800 dark:text-orange-300 md:text-sm">
+            如果您发现交易明细中的扣费金额与预期不符，或者出现重复扣费、异常扣费等情况，请
+            <strong class="font-semibold text-orange-600 dark:text-orange-400">及时联系客服</strong>
+            进行排查和处理。我们会认真核查每一笔交易记录，确保您的消费透明合理。
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

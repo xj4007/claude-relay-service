@@ -140,7 +140,12 @@
               <strong class="font-semibold text-blue-600 dark:text-blue-400">"查询统计"</strong>
               按钮后，页面最底部将展示详细的
               <strong class="font-semibold text-blue-600 dark:text-blue-400">交易明细日志</strong
-              >，真正透明消费。如有疑问可以咨询客服，感谢各位大佬的支持哈！ 🙏
+              >，真正透明消费。
+              <span class="mt-1 block text-orange-600 dark:text-orange-400">
+                <i class="fas fa-exclamation-triangle mr-1" />
+                如发现扣费异常或有任何疑问，请及时联系客服排查处理！
+              </span>
+              感谢各位大佬的支持哈！ 🙏
             </p>
           </div>
         </div>

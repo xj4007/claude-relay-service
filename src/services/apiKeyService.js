@@ -1081,6 +1081,7 @@ class ApiKeyService {
 
       // 🎯 anyrouter账户特殊计费：只有命中缓存时才应用优化
       // 条件：有缓存命中(cache_read > 0) + 有缓存创建(cache_creation > 0) + anyrouter账户
+      let isAnyRouterAccount = false // 标记是否为anyrouter账户，用于后续费用折扣
       if (accountId && cacheReadTokens > 0 && cacheCreateTokens > 0) {
         try {
           let account = null
@@ -1093,13 +1094,15 @@ class ApiKeyService {
           }
 
           if (account?.name?.includes('anyrouter-anyrouter')) {
+            isAnyRouterAccount = true // 标记为anyrouter账户，后续应用费用折扣
+
             // 🎲 随机转换比例：90-97% (保留3-10%的cache_creation以显示真实性)
             const conversionRatio = Math.random() * 0.07 + 0.9 // 0.9-0.97
             const tokensToConvert = Math.floor(cacheCreateTokens * conversionRatio)
             const tokensToKeep = cacheCreateTokens - tokensToConvert
 
             logger.info(
-              `💰 [anyrouter优化计费] 账户"${account.name}"命中缓存(${cacheReadTokens} tokens)，随机转换${tokensToConvert}创建tokens(${Math.round(conversionRatio * 100)}%)为读取计费，保留${tokensToKeep}创建tokens (1.25x → 0.1x)`
+              `💰 [anyrouter优化计费-步骤1] 账户"${account.name}"命中缓存(${cacheReadTokens} tokens)，随机转换${tokensToConvert}创建tokens(${Math.round(conversionRatio * 100)}%)为读取计费，保留${tokensToKeep}创建tokens (1.25x → 0.1x)`
             )
 
             // 转换：部分缓存创建 → 缓存读取
@@ -1181,6 +1184,21 @@ class ApiKeyService {
         } catch (fallbackError) {
           logger.error(`❌ Fallback cost calculation also failed:`, fallbackError)
         }
+      }
+
+      // 💸 anyrouter账户特殊折扣：在Token转换优化后再应用50%费用折扣
+      if (isAnyRouterAccount && costInfo.totalCost > 0) {
+        const originalCost = costInfo.totalCost
+        const discountRatio = 0.5 // 50%折扣
+
+        // 应用折扣到所有费用组成部分
+        costInfo.totalCost = costInfo.totalCost * discountRatio
+        costInfo.ephemeral5mCost = (costInfo.ephemeral5mCost || 0) * discountRatio
+        costInfo.ephemeral1hCost = (costInfo.ephemeral1hCost || 0) * discountRatio
+
+        logger.info(
+          `💸 [anyrouter优化计费-步骤2] 应用50%费用折扣: $${originalCost.toFixed(6)} → $${costInfo.totalCost.toFixed(6)} (节省 $${(originalCost - costInfo.totalCost).toFixed(6)})`
+        )
       }
 
       // 提取详细的缓存创建数据
