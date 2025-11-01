@@ -15,7 +15,6 @@ class ClaudeConsoleAccountService {
     // Redis键前缀
     this.ACCOUNT_KEY_PREFIX = 'claude_console_account:'
     this.SHARED_ACCOUNTS_KEY = 'shared_claude_console_accounts'
-    this.ACCOUNT_CONCURRENCY_PREFIX = 'account_concurrency:console:'
 
     // 🚀 性能优化：缓存派生的加密密钥，避免每次重复计算
     // scryptSync 是 CPU 密集型操作，缓存可以减少 95%+ 的 CPU 密集型操作
@@ -68,9 +67,9 @@ class ClaudeConsoleAccountService {
       schedulable = true, // 是否可被调度
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
-      accountConcurrencyLimit = 0, // 账户并发限制，0表示不限制
       useUnifiedClientId = false, // 是否使用统一的客户端标识
-      unifiedClientId = '' // 统一的客户端标识
+      unifiedClientId = '', // 统一的客户端标识
+      maxConcurrentTasks = 0 // 最大并发任务数，0表示无限制
     } = options
 
     // 验证必填字段
@@ -118,11 +117,10 @@ class ClaudeConsoleAccountService {
       lastResetDate: redis.getDateStringInTimezone(), // 最后重置日期（按配置时区）
       quotaResetTime, // 额度重置时间
       quotaStoppedAt: '', // 因额度停用的时间
-      // 并发控制相关
-      accountConcurrencyLimit: accountConcurrencyLimit.toString(), // 账户并发限制
       // 统一客户端标识相关
       useUnifiedClientId: useUnifiedClientId.toString(), // 是否使用统一的客户端标识
-      unifiedClientId: unifiedClientId || '' // 统一的客户端标识
+      unifiedClientId: unifiedClientId || '', // 统一的客户端标识
+      maxConcurrentTasks: maxConcurrentTasks.toString() // 最大并发任务数，0表示无限制
     }
 
     const client = redis.getClientSafe()
@@ -159,7 +157,7 @@ class ClaudeConsoleAccountService {
       lastResetDate: accountData.lastResetDate,
       quotaResetTime,
       quotaStoppedAt: null,
-      accountConcurrencyLimit: parseInt(accountData.accountConcurrencyLimit) || 0
+      activeTaskCount: 0 // 新增：新建账户当前并发数为0
     }
   }
 
@@ -193,6 +191,9 @@ class ClaudeConsoleAccountService {
           // 获取限流状态信息
           const rateLimitInfo = this._getRateLimitInfo(accountData)
 
+          // 获取实时并发计数
+          const activeTaskCount = await redis.getConsoleAccountConcurrency(accountData.id)
+
           accounts.push({
             id: accountData.id,
             platform: accountData.platform,
@@ -225,10 +226,12 @@ class ClaudeConsoleAccountService {
             quotaResetTime: accountData.quotaResetTime || '00:00',
             quotaStoppedAt: accountData.quotaStoppedAt || null,
             // 并发控制
-            accountConcurrencyLimit: parseInt(accountData.accountConcurrencyLimit) || 0,
-            // 统一客户端标识
             useUnifiedClientId: accountData.useUnifiedClientId === 'true',
-            unifiedClientId: accountData.unifiedClientId || ''
+            unifiedClientId: accountData.unifiedClientId || '',
+
+            // 并发控制相关
+            maxConcurrentTasks: parseInt(accountData.maxConcurrentTasks) || 0,
+            activeTaskCount
           })
         }
       }
@@ -278,6 +281,11 @@ class ClaudeConsoleAccountService {
     if (accountData.proxy) {
       accountData.proxy = JSON.parse(accountData.proxy)
     }
+
+    // 解析并发控制字段
+    accountData.maxConcurrentTasks = parseInt(accountData.maxConcurrentTasks) || 0
+    // 获取实时并发计数
+    accountData.activeTaskCount = await redis.getConsoleAccountConcurrency(accountId)
 
     logger.debug(
       `[DEBUG] Final account data - name: ${accountData.name}, hasApiUrl: ${!!accountData.apiUrl}, hasApiKey: ${!!accountData.apiKey}, supportedModels: ${JSON.stringify(accountData.supportedModels)}`
@@ -377,17 +385,15 @@ class ClaudeConsoleAccountService {
         updatedData.quotaStoppedAt = updates.quotaStoppedAt
       }
 
-      // 并发控制相关字段
-      if (updates.accountConcurrencyLimit !== undefined) {
-        updatedData.accountConcurrencyLimit = updates.accountConcurrencyLimit.toString()
-      }
-
       // 统一客户端标识相关字段
       if (updates.useUnifiedClientId !== undefined) {
         updatedData.useUnifiedClientId = updates.useUnifiedClientId.toString()
       }
       if (updates.unifiedClientId !== undefined) {
         updatedData.unifiedClientId = updates.unifiedClientId
+      }
+      if (updates.maxConcurrentTasks !== undefined) {
+        updatedData.maxConcurrentTasks = updates.maxConcurrentTasks.toString()
       }
 
       // ✅ 直接保存 subscriptionExpiresAt（如果提供）
@@ -1819,56 +1825,7 @@ class ClaudeConsoleAccountService {
       throw error
     }
   }
-
-  // 🔢 账户并发控制方法
-  // 增加账户并发计数
-  async incrAccountConcurrency(accountId, requestId, leaseSeconds = 600) {
-    const client = redis.getClientSafe()
-    const key = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}`
-    const requestKey = `${key}:${requestId}`
-
-    // 设置请求标记和过期时间
-    await client.set(requestKey, '1', 'EX', leaseSeconds)
-
-    // 获取当前并发数
-    const keys = await client.keys(`${key}:*`)
-    return keys.length
-  }
-
-  // 减少账户并发计数
-  async decrAccountConcurrency(accountId, requestId) {
-    const client = redis.getClientSafe()
-    const requestKey = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}:${requestId}`
-    await client.del(requestKey)
-  }
-
-  // 获取账户当前并发数
-  async getAccountConcurrency(accountId) {
-    const client = redis.getClientSafe()
-    const pattern = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}:*`
-    let cursor = '0'
-    let count = 0
-
-    // 使用 SCAN 命令避免阻塞 Redis（生产环境推荐）
-    do {
-      const reply = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
-      cursor = reply[0]
-      count += reply[1].length
-    } while (cursor !== '0')
-
-    return count
-  }
-
-  // 刷新账户并发租期
-  async refreshAccountConcurrencyLease(accountId, requestId, leaseSeconds = 600) {
-    const client = redis.getClientSafe()
-    const requestKey = `${this.ACCOUNT_CONCURRENCY_PREFIX}${accountId}:${requestId}`
-    await client.expire(requestKey, leaseSeconds)
-  }
-
-  // 🔥 流式超时管理方法
-  /**
-   * 记录流式超时事件
+  /*
    * @param {string} accountId - 账户ID
    * @param {string} timeoutType - 超时类型（TOTAL_TIMEOUT | IDLE_TIMEOUT）
    * @param {number} duration - 超时时长（毫秒）

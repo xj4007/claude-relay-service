@@ -1142,6 +1142,23 @@
                 </div>
               </div>
 
+              <!-- 并发控制字段 -->
+              <div>
+                <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  最大并发任务数
+                </label>
+                <input
+                  v-model.number="form.maxConcurrentTasks"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  min="0"
+                  placeholder="0 表示不限制"
+                  type="number"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  限制该账户的并发请求数量，0 表示不限制
+                </p>
+              </div>
+
               <div>
                 <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
                   >模型限制 (可选)</label
@@ -1701,7 +1718,7 @@
                 账户并发限制 (可选)
               </label>
               <input
-                v-model.number="form.accountConcurrencyLimit"
+                v-model.number="form.maxConcurrentTasks"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
                 min="0"
                 placeholder="0 表示无限制"
@@ -2525,7 +2542,7 @@
               账户并发限制 (可选)
             </label>
             <input
-              v-model.number="form.accountConcurrencyLimit"
+              v-model.number="form.maxConcurrentTasks"
               class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
               min="0"
               placeholder="0 表示无限制"
@@ -2630,6 +2647,23 @@
                   {{ usagePercentage.toFixed(1) }}% 已使用
                 </span>
               </div>
+            </div>
+
+            <!-- 并发控制字段（编辑模式）-->
+            <div>
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                最大并发任务数
+              </label>
+              <input
+                v-model.number="form.maxConcurrentTasks"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                min="0"
+                placeholder="0 表示不限制"
+                type="number"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                限制该账户的并发请求数量，0 表示不限制
+              </p>
             </div>
 
             <div>
@@ -2964,6 +2998,23 @@
                   type="time"
                 />
               </div>
+            </div>
+
+            <!-- 并发控制字段 -->
+            <div>
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                最大并发任务数
+              </label>
+              <input
+                v-model.number="form.maxConcurrentTasks"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                min="0"
+                placeholder="0 表示不限制"
+                type="number"
+              />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                限制该账户的并发请求数量，0 表示不限制
+              </p>
             </div>
           </div>
 
@@ -3635,7 +3686,7 @@ const form = ref({
   dailyUsage: props.account?.dailyUsage || 0,
   quotaResetTime: props.account?.quotaResetTime || '00:00',
   // 账户并发限制字段
-  accountConcurrencyLimit: props.account?.accountConcurrencyLimit || 0,
+  maxConcurrentTasks: props.account?.maxConcurrentTasks || 0,
   // Bedrock 特定字段
   accessKeyId: props.account?.accessKeyId || '',
   secretAccessKey: props.account?.secretAccessKey || '',
@@ -4531,10 +4582,12 @@ const createAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       // 账户并发限制字段
-      data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
+      data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       // 统一客户端标识字段
       data.useUnifiedClientId = form.value.useUnifiedClientId || false
       data.unifiedClientId = form.value.unifiedClientId || ''
+      // 并发控制字段
+      data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
     } else if (form.value.platform === 'openai-responses') {
       // OpenAI-Responses 账户特定数据
       data.baseApi = form.value.baseApi
@@ -4838,10 +4891,12 @@ const updateAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       // 账户并发限制字段
-      data.accountConcurrencyLimit = form.value.accountConcurrencyLimit || 0
+      data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       // 统一客户端标识字段
       data.useUnifiedClientId = form.value.useUnifiedClientId || false
       data.unifiedClientId = form.value.unifiedClientId || ''
+      // 并发控制字段
+      data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
     }
 
     // OpenAI-Responses 特定更新
@@ -5432,7 +5487,9 @@ watch(
         // 额度管理字段
         dailyQuota: newAccount.dailyQuota || 0,
         dailyUsage: newAccount.dailyUsage || 0,
-        quotaResetTime: newAccount.quotaResetTime || '00:00'
+        quotaResetTime: newAccount.quotaResetTime || '00:00',
+        // 并发控制字段
+        maxConcurrentTasks: newAccount.maxConcurrentTasks || 0
       }
 
       // 如果是Claude Console账户，加载实时使用情况
