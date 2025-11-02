@@ -1530,10 +1530,17 @@ class UnifiedClaudeScheduler {
           if (accountType === 'claude-console' && account.maxConcurrentTasks > 0) {
             const currentConcurrency = await redis.getConsoleAccountConcurrency(account.id)
             if (currentConcurrency >= account.maxConcurrentTasks) {
+              // 🕒 尝试等待并发释放（最多等待30秒）
+              const canProceed = await this._ensureStickyConsoleConcurrency(account.id, sessionHash)
+              if (!canProceed) {
+                logger.info(
+                  `🚫 Skipping group member ${account.name} (${account.id}) due to concurrency limit: ${currentConcurrency}/${account.maxConcurrentTasks}`
+                )
+                continue
+              }
               logger.info(
-                `🚫 Skipping group member ${account.name} (${account.id}) due to concurrency limit: ${currentConcurrency}/${account.maxConcurrentTasks}`
+                `✅ Concurrency slot available after waiting for group member ${account.name}`
               )
-              continue
             }
           }
 

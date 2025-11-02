@@ -6,6 +6,55 @@
 
 ---
 
+## 🚀 快速参考：anyrouter 账户优化机制
+
+系统为 **anyrouter-anyrouter- 账户**提供了两种互补的成本优化机制：
+
+### 1️⃣ anyrouter 特殊计费（命中缓存场景）
+
+**触发条件**：
+
+- ✅ 账户名包含 `anyrouter-anyrouter` 关键字
+- ✅ `cache_read` > 0（已命中缓存）
+- ✅ `cache_create` > 0（有缓存创建）
+
+**优化内容**：
+
+- 📊 **Token 转换**：90-97% 的 `cache_create` 随机转为 `cache_read`
+- 💰 **费用折扣**：再应用 50% 费用折扣
+- 💡 **节省效果**：综合节���约 95% 成本
+
+**代码位置**：`src/services/apiKeyService.js` 的 `recordUsageWithDetails()` 函数（第 1123-1174 行）
+
+### 2️⃣ 智能缓存优化（未命中缓存场景）
+
+**触发条件**：
+
+- ✅ 账户名包含 `anyrouter-anyrouter` 关键字
+- ✅ 账户类型为 `claude-console` 或 `claude-official`
+- ✅ `cache_read` = 0（未命中缓存）
+- ✅ `cache_create` ≥ 10,000 tokens
+- ✅ 5 分钟内有相似请求（输入差异 ≤ 20%，缓存差异 ≤ 15%）
+
+**优化内容**：
+
+- 📊 **Token 转换**：70% 的 `cache_create` 转为 `cache_read`
+- 💡 **节省效果**：约 63% 成本
+
+**代码位置**：
+
+- `src/services/smartCacheOptimizer.js`（智能缓存优化服务）
+- `src/services/apiKeyService.js` 的 `recordUsage()` 函数（第 897-911 行）
+
+### 📌 重要说明
+
+- **专属优化**：两种优化机制都**只对 anyrouter-anyrouter- 账户生效**
+- **互补关系**：覆盖不同场景（已命中缓存 vs 未命中缓存）
+- **不影响其他账户**：其他上游账户保持原有计费逻辑
+- **透明优化**：无需修改客户端代码
+
+---
+
 ## 🎯 核心特性
 
 ### 1. 数据存储
@@ -35,7 +84,13 @@
 
 **功能概述**：
 
-智能缓存优化是一项自动成本优化功能，专为那些缓存创建成本高但难以命中缓存的账户（如 anyrouter、Console 等）设计。通过检测相似请求并自动应用"缓存折扣"，大幅降低用户成本。
+智能缓存优化是一项自动成本优化功能，**专为 anyrouter-anyrouter- 关键字的账户设计**。通过检测相似请求并自动应用"缓存折扣"，大幅降低用户成本。
+
+**⚠️ 重要说明**：
+
+- **只对账户名包含 `anyrouter-anyrouter` 关键字的账户生效**
+- **其他上游账户不会被应用智能缓存优化**
+- 这是为了避免影响正常账户的计费逻辑
 
 **核心特性**：
 
@@ -45,6 +100,7 @@
 - ✅ 交易日志完整记录优化信息
 - ✅ 仅对有缓存创建的请求生效（不影响其他请求）
 - ✅ 透明优化，无需修改客户端代码
+- ✅ **只针对 anyrouter 账户，不影响其他账户**
 
 **工作原理**：
 
@@ -58,20 +114,23 @@
 
 **适用场景**：
 
-- anyrouter 账户（缓存创建高，但缓存命中率低）
-- Claude Console 账户（大量 cache_create tokens）
+- **anyrouter-anyrouter- 账户**（缓存创建高，但缓存命中率低）
 - 持续对话场景（相似请求频繁）
 - 代码编辑场景（增量修改请求）
 
 **触发条件**：
 
+- ✅ **账户名必须包含 `anyrouter-anyrouter` 关键字**（核心条件）
+- ✅ **账户类型为 `claude-console` 或 `claude-official`**
 - ✅ `cache_create` ≥ 10,000 tokens（可配置）
 - ✅ `cache_read` = 0（未命中缓存）
 - ✅ 5 分钟内有相似请求（可配置）
 - ✅ 输入 tokens 差异 ≤ 20%（可配置）
 - ✅ 缓存创建 tokens 差异 ≤ 15%（可配置）
+- ❌ **非 anyrouter 账户不会触发优化**
 - ❌ 无缓存创建的请求不会触发
 - ❌ 已命中缓存的请求不需要优化
+- ❌ 未提供账户信息时不会触发
 
 **配置参数**（`config/config.js`）：
 
@@ -1309,6 +1368,40 @@ sum(transactionLogs.cost) ≈ 统计数据.currentTotalCost  // 对于 12h 内
 - ✅ 验证数据一致性：$20 总额 - $9.98 消费 = $10.02 剩余 ✅
 - ✅ 更新计算逻辑文档
 - ✅ 完善 Bug 说明文档
+
+### 2025-11-02
+
+- ✅ **修复智能缓存优化影响所有账户的问题** 🔧
+  - **问题**：智能缓存优化对所有账户生效，包括不希望优化的上游账户
+  - **需求**：只对账户名包含 `anyrouter-anyrouter` 关键字的账户应用优化
+  - **修复方案**：
+    - 修改 `src/services/smartCacheOptimizer.js`：
+      - 添加 `accountId` 和 `accountType` 参数到 `checkAndOptimize()` 方法
+      - 在执行优化前检查账户名是否包含 `anyrouter-anyrouter`
+      - 只支持 `claude-console` 和 `claude-official` 账户类型
+      - 非 anyrouter 账户直接返回 null，跳过优化
+    - 修改 `src/services/apiKeyService.js`：
+      - `recordUsage()` 函数添加 `accountType` 参数
+      - 调用智能缓存优化时传递 `accountId` 和 `accountType`
+    - 修改 `src/routes/api.js`：
+      - 在非流式 fallback 响应中添加 `accountType` 字段
+      - 在所有 `recordUsage()` 调用中传递 `accountType` 参数
+      - 包括流式、非流式、Bedrock 等所有场景
+  - **影响文件**：
+    - `src/services/smartCacheOptimizer.js` (第 39-90 行：账户检查逻辑)
+    - `src/services/apiKeyService.js` (第 893-911 行：参数传递)
+    - `src/routes/api.js` (第 641-702 行：添加 accountType 字段)
+    - `src/routes/api.js` (第 443-452, 752-761, 1065-1077 行：传递参数)
+  - **结果**：
+    - ✅ 智能缓存优化只对 anyrouter 账户生效
+    - ✅ 其他上游账户不受影响，保持原有计费逻辑
+    - ✅ 日志清晰显示是否跳过优化
+  - **日志示例**：
+    ```log
+    ✅ Smart cache: Detected anyrouter account "anyrouter-anyrouter-xxx", eligible for optimization
+    ⏭️ Smart cache: Account "other-account" is not anyrouter, skipping optimization
+    ⏭️ Smart cache: No account info provided, skipping optimization
+    ```
 
 ---
 

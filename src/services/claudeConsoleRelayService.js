@@ -734,6 +734,21 @@ class ClaudeConsoleRelayService {
       )
 
       throw error
+    } finally {
+      // 🧹 确保释放并发槽位
+      if (concurrencyAcquired && requestId && accountId) {
+        try {
+          await redis.decrConsoleAccountConcurrency(accountId, requestId)
+          logger.debug(
+            `🔓 Released concurrency slot for account ${accountId}, request: ${requestId}`
+          )
+        } catch (cleanupError) {
+          logger.error(
+            `❌ Failed to release concurrency for account ${accountId}:`,
+            cleanupError.message
+          )
+        }
+      }
     }
   }
 
@@ -881,6 +896,29 @@ class ClaudeConsoleRelayService {
         `❌ [STREAM-ERR] Acc: ${account?.name} | Code: ${error.code || error.name} | Status: ${error.response?.status || 'N/A'} | ${errorMsg}`
       )
       throw error
+    } finally {
+      // 🧹 清理租约刷新定时器
+      if (leaseRefreshInterval) {
+        clearInterval(leaseRefreshInterval)
+        logger.debug(
+          `🛑 Stopped concurrency lease refresh timer for account ${accountId}, request: ${requestId}`
+        )
+      }
+
+      // 🧹 确保释放并发槽位
+      if (concurrencyAcquired && requestId && accountId) {
+        try {
+          await redis.decrConsoleAccountConcurrency(accountId, requestId)
+          logger.debug(
+            `🔓 Released stream concurrency slot for account ${accountId}, request: ${requestId}`
+          )
+        } catch (cleanupError) {
+          logger.error(
+            `❌ Failed to release stream concurrency for account ${accountId}:`,
+            cleanupError.message
+          )
+        }
+      }
     }
   }
 

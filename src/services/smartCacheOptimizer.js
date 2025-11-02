@@ -32,9 +32,11 @@ class SmartCacheOptimizer {
    *
    * @param {string} keyId - API Key ID
    * @param {Object} currentRequest - 当前请求的token信息
+   * @param {string} accountId - 账户ID (可选)
+   * @param {string} accountType - 账户类型 (可选)
    * @returns {Promise<Object|null>} - 优化结果或null（不优化）
    */
-  async checkAndOptimize(keyId, currentRequest) {
+  async checkAndOptimize(keyId, currentRequest, accountId = null, accountType = null) {
     // 检查是否启用
     if (!this.config.enabled) {
       return null
@@ -46,6 +48,44 @@ class SmartCacheOptimizer {
       // 🔍 验证必要参数
       if (!inputTokens || !cacheCreateTokens || typeof cacheReadTokens === 'undefined' || !model) {
         logger.debug('⚠️ Smart cache: Missing required parameters, skipping optimization')
+        return null
+      }
+
+      // 🎯 检查是否为 anyrouter 账户（只对 anyrouter 账户应用智能缓存优化）
+      if (accountId && accountType) {
+        let isAnyRouterAccount = false
+        try {
+          let account = null
+          if (accountType === 'claude-console') {
+            const claudeConsoleAccountService = require('./claudeConsoleAccountService')
+            account = await claudeConsoleAccountService.getAccount(accountId)
+          } else if (accountType === 'claude-official') {
+            const claudeAccountService = require('./claudeAccountService')
+            account = await claudeAccountService.getAccount(accountId)
+          }
+
+          if (account?.name?.includes('anyrouter-anyrouter')) {
+            isAnyRouterAccount = true
+            logger.debug(
+              `✅ Smart cache: Detected anyrouter account "${account.name}", eligible for optimization`
+            )
+          } else {
+            logger.debug(
+              `⏭️ Smart cache: Account "${account?.name || 'unknown'}" is not anyrouter, skipping optimization`
+            )
+            return null
+          }
+        } catch (err) {
+          logger.warn(`⚠️ Smart cache: Failed to check account type: ${err.message}`)
+          return null
+        }
+
+        if (!isAnyRouterAccount) {
+          return null
+        }
+      } else {
+        // 如果没有传递账户信息，不应用优化（默认策略：只对明确的 anyrouter 账户优化）
+        logger.debug('⏭️ Smart cache: No account info provided, skipping optimization')
         return null
       }
 

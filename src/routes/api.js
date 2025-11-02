@@ -447,7 +447,8 @@ async function handleMessagesRequest(req, res) {
                     0,
                     0,
                     result.model,
-                    accountId
+                    accountId,
+                    accountType
                   )
                   .catch((error) => {
                     logger.error('❌ Failed to record Bedrock stream usage:', error)
@@ -646,6 +647,10 @@ async function handleMessagesRequest(req, res) {
                   res,
                   req.headers
                 )
+                // 添加 accountType 到响应中
+                if (fallbackResponse && typeof fallbackResponse === 'object') {
+                  fallbackResponse.accountType = selectedAccountType
+                }
               } else if (selectedAccountType === 'claude-console') {
                 fallbackResponse = await claudeConsoleRelayService.relayRequest(
                   req.body,
@@ -655,6 +660,10 @@ async function handleMessagesRequest(req, res) {
                   req.headers,
                   selectedAccountId
                 )
+                // 添加 accountType 到响应中
+                if (fallbackResponse && typeof fallbackResponse === 'object') {
+                  fallbackResponse.accountType = selectedAccountType
+                }
               } else if (selectedAccountType === 'bedrock') {
                 const bedrockAccountResult =
                   await bedrockAccountService.getAccount(selectedAccountId)
@@ -676,7 +685,8 @@ async function handleMessagesRequest(req, res) {
                       ? bedrockFallbackResult.data
                       : { error: bedrockFallbackResult.error }
                   ),
-                  accountId: selectedAccountId
+                  accountId: selectedAccountId,
+                  accountType: selectedAccountType
                 }
               } else if (selectedAccountType === 'ccr') {
                 fallbackResponse = await ccrRelayService.relayRequest(
@@ -687,6 +697,10 @@ async function handleMessagesRequest(req, res) {
                   req.headers,
                   selectedAccountId
                 )
+                // 添加 accountType 到响应中
+                if (fallbackResponse && typeof fallbackResponse === 'object') {
+                  fallbackResponse.accountType = selectedAccountType
+                }
               }
 
               return fallbackResponse
@@ -743,7 +757,8 @@ async function handleMessagesRequest(req, res) {
                   cacheCreateTokens,
                   cacheReadTokens,
                   model,
-                  result.accountId
+                  result.accountId,
+                  result.response.accountType
                 )
 
                 await queueRateLimitUpdate(
@@ -1050,6 +1065,7 @@ async function handleMessagesRequest(req, res) {
 
           // 记录真实的token使用量（包含模型信息和所有4种token以及账户ID）
           const responseAccountId = response.accountId
+          const responseAccountType = response.accountType
           await apiKeyService.recordUsage(
             req.apiKey.id,
             inputTokens,
@@ -1057,7 +1073,8 @@ async function handleMessagesRequest(req, res) {
             cacheCreateTokens,
             cacheReadTokens,
             model,
-            responseAccountId
+            responseAccountId,
+            responseAccountType
           )
 
           await queueRateLimitUpdate(

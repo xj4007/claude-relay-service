@@ -890,19 +890,25 @@ class ApiKeyService {
     cacheCreateTokens = 0,
     cacheReadTokens = 0,
     model = 'unknown',
-    accountId = null
+    accountId = null,
+    accountType = null
   ) {
     try {
-      // 🎯 智能缓存优化：检测相似请求并应用缓存折扣
+      // 🎯 智能缓存优化：检测相似请求并应用缓存折扣（只对 anyrouter 账户生效）
       let cacheOptimizationInfo = null
       const smartCacheOptimizer = require('./smartCacheOptimizer')
-      const optimizationResult = await smartCacheOptimizer.checkAndOptimize(keyId, {
-        inputTokens,
-        outputTokens,
-        cacheCreateTokens,
-        cacheReadTokens,
-        model
-      })
+      const optimizationResult = await smartCacheOptimizer.checkAndOptimize(
+        keyId,
+        {
+          inputTokens,
+          outputTokens,
+          cacheCreateTokens,
+          cacheReadTokens,
+          model
+        },
+        accountId,
+        accountType
+      )
 
       if (optimizationResult) {
         // 使用优化后的tokens
