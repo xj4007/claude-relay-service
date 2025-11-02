@@ -199,14 +199,14 @@ const config = {
     })(),
     // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'Qwen/Qwen3-Coder-30B-A3B-Instruct', // 默认模型（第一次审核，小模型）
+    model: process.env.MODERATION_MODEL || 'MiniMaxAI/MiniMax-M2', // 默认模型（第一次审核，小模型）
     proModel: process.env.MODERATION_PRO_MODEL || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，用于重试时的备选）
     advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（第二次审核，大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）
     maxTokens: parseInt(process.env.MODERATION_MAX_TOKENS) || 100,
     timeout: parseInt(process.env.MODERATION_TIMEOUT) || 10000,
     // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗和TPM压力）
-    maxContentLength: parseInt(process.env.MODERATION_MAX_CONTENT_LENGTH) || 100,
+    maxContentLength: parseInt(process.env.MODERATION_MAX_CONTENT_LENGTH) || 50,
     // 🔄 重试配置
     maxRetries: parseInt(process.env.MODERATION_MAX_RETRIES) || 3, // 单个模型最多重试3次
     retryDelay: parseInt(process.env.MODERATION_RETRY_DELAY) || 5000, // 重试间隔5秒（会递增到10秒）
@@ -222,7 +222,12 @@ const config = {
     //         在接下来的circuitBreakerDuration时间内，所有请求将直接跳过审核，避免重复等待超时。
     //         超过时间后熔断器自动重置，恢复正常审核。
     circuitBreakerEnabled: process.env.MODERATION_CIRCUIT_BREAKER_ENABLED !== 'false', // 默认启用
-    circuitBreakerDuration: parseInt(process.env.MODERATION_CIRCUIT_BREAKER_DURATION) || 300000 // 5分钟
+    circuitBreakerDuration: parseInt(process.env.MODERATION_CIRCUIT_BREAKER_DURATION) || 300000, // 5分钟
+    // 🚨 性能监控与降级（新增）
+    performanceMonitoringEnabled: true,     // 启用性能监控（默认true）
+    slowResponseThreshold: 8000,           // 慢响应阈值（毫秒，默认8秒）
+    maxConsecutiveFailures: 3,              // 连续失败次数阈值（默认3次）
+    degradationDuration: 300000            // 降级持续时间（毫秒，默认5分钟）
   },
   
     // 🎯 智能缓存优化配置（自动检测相似请求并应用缓存折扣）

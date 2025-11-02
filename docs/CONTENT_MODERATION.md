@@ -4,9 +4,36 @@
 
 内容审核系统是一个严格的NSFW（不安全内容）检测和拦截机制，用于保护服务免受不适当内容的影响。系统会在请求发送到Claude API之前，对**所有输入内容**进行审查。
 
+## 🚀 v2.5.0 重大更新（2025-11-02）
+
+### 🎯 核心优化
+
+1. **智能内容提取**：优化审核内容提取策略，减少token消耗
+   - 每个消息片段截取前N字符（默认1000字符，可配置）
+   - 提取：最后用户输入 + 前一次assistant回复 + 倒数第二次用户输入
+   - **显著降低token使用量，提高审核效率**
+
+2. **简化审核流程**：从三级审核简化为二级审核
+   - Phase 1：默认模型初次审核
+   - Phase 2：违规时使用高级模型复核
+   - **更快的响应速度，更低的成本**
+
+3. **性能监控与降级**：全新的性能监控和自动降级机制
+   - 监控响应时间（默认10秒阈值）
+   - 追踪连续失败次数（默认3次阈值）
+   - 自动触发降级（默认5分钟内放行所有请求）
+   - **应对硅基流动API负载问题，避免误杀用户**
+
+4. **宽松审核策略**：优化系统提示词，更人性化的审核标准
+   - ✅ 允许情绪发泄（抱怨、轻度脏话）
+   - ✅ 允许技术上下文中的暴力隐喻（"杀死这个bug"）
+   - ✅ 任何技术上下文都放行
+   - ❌ 严格禁止纯NSFW内容（无技术上下文的色情请求）
+   - **减少误判，提升用户体验**
+
 ## 🎯 核心功能
 
-### 1. 全面内容审核
+### 1. 智能内容提取（v2.5.0新增）
 
 #### 审核范围
 
@@ -604,12 +631,23 @@ contentModeration: {
   apiBaseUrl: 'https://api.siliconflow.cn', // 审核API基础地址
   apiKey: 'sk_xxxxx',              // 审核API认证密钥
 
-  // 三级审核模型配置
+  // 二级审核模型配置（v2.5.0简化）
   model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 默认模型（快速检测）
   proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp',    // Pro模型（TPM更大，重试备选）
-  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度）
+  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度复核）
   enableSecondCheck: true,          // 启用二次审核（默认true）
                                     // false时第一级违规直接拒绝，不进行大模型验证
+
+  // 🚨 性能监控与降级（v2.5.0新增）
+  performanceMonitoringEnabled: true,     // 启用性能监控（默认true）
+  slowResponseThreshold: 10000,           // 慢响应阈值（毫秒，默认10秒）
+  maxConsecutiveFailures: 3,              // 连续失败次数阈值（默认3次）
+  degradationDuration: 300000,            // 降级持续时间（毫秒，默认5分钟）
+                                          // 触发降级后，该时间内所有请求放行
+
+  // ✂️ 智能提取配置（v2.5.0新增）
+  maxContentLength: 1000,          // 每个消息片段截取的最大字符数（默认1000）
+                                   // 用于智能提取审核内容，减少token消耗
 
   // API限制
   maxTokens: 100,                  // 审核API最大响应tokens
@@ -634,11 +672,20 @@ CONTENT_MODERATION_ENABLED=true
 CONTENT_MODERATION_API_BASE_URL=https://api.siliconflow.cn
 CONTENT_MODERATION_API_KEY=sk_xxxxx
 
-# 三级审核模型配置
+# 二级审核模型配置
 MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp           # 默认模型
 MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp   # Pro模型（重试备选）
 MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct  # 高级模型
 MODERATION_ENABLE_SECOND_CHECK=true
+
+# 🚨 性能监控与降级（v2.5.0新增）
+MODERATION_PERFORMANCE_MONITORING_ENABLED=true
+MODERATION_SLOW_RESPONSE_THRESHOLD=10000      # 慢响应阈值（毫秒）
+MODERATION_MAX_CONSECUTIVE_FAILURES=3         # 连续失败阈值
+MODERATION_DEGRADATION_DURATION=300000        # 降级持续时间（毫秒）
+
+# ✂️ 智能提取配置（v2.5.0新增）
+MODERATION_MAX_CONTENT_LENGTH=1000            # 每个片段截取字符数
 
 # API限制
 CONTENT_MODERATION_MAX_TOKENS=100
@@ -680,12 +727,12 @@ contentModeration: {
 
 **为什么选择Pro模型作为备选？**
 
-| 特性 | 默认模型 | Pro模型 | 说明 |
-| --- | --- | --- | --- |
-| TPM限制 | 较低 | **更高** | Pro版TPM限制更大，适合高并发 |
-| 响应速度 | 快 | 快 | 两者速度相当 |
-| 成本 | 低 | 稍高 | 仅在需要时使用Pro模型 |
-| 适用场景 | 常规请求 | **限流重试** | 默认模型限流时的最佳选择 |
+| 特性     | 默认模型 | Pro模型      | 说明                         |
+| -------- | -------- | ------------ | ---------------------------- |
+| TPM限制  | 较低     | **更高**     | Pro版TPM限制更大，适合高并发 |
+| 响应速度 | 快       | 快           | 两者速度相当                 |
+| 成本     | 低       | 稍高         | 仅在需要时使用Pro模型        |
+| 适用场景 | 常规请求 | **限流重试** | 默认模型限流时的最佳选择     |
 
 ### 2. 监控模型级联重试的执行情况
 
@@ -951,6 +998,56 @@ A: 因为：
 
 ## 📋 版本历史
 
+### v2.5.0 (2025-11-02) - 性能监控与降级机制
+
+#### 🚀 重大更新
+
+- ✨ **智能内容提取**：优化审核内容提取策略，显著减少token消耗
+  - 每个消息片段截取前N字符（默认1000，可通过maxContentLength配置）
+  - 提取：最后用户输入 + 前一次assistant回复 + 倒数第二次用户输入
+  - 支持灵活配置截取长度，平衡审核准确度和token消耗
+  - 建议值：50-1000字符
+
+- ✨ **简化审核流程**：从三级审核简化为二级审核
+  - Phase 1：默认模型初次审核
+  - Phase 2：违规时使用高级模型复核
+  - 移除第二阶段的倒数两次消息合并审核
+  - 更快的响应速度，更低的成本
+
+- 🚨 **性能监控与自动降级**：全新的性能监控机制
+  - 监控响应时间（默认10秒阈值）
+  - 追踪连续失败次数（默认3次阈值）
+  - 自动触发降级（默认5分钟内放行所有请求）
+  - 应对硅基流动API负载问题，避免误杀合法用户
+
+- ✨ **宽松审核策略**：优化系统提示词，更人性化
+  - ✅ 允许情绪发泄（抱怨、轻度脏话）
+  - ✅ 允许技术上下文中的暴力隐喻（"杀死这个bug"）
+  - ✅ 任何技术上下文都放行
+  - ❌ 仅严格禁止纯NSFW内容（无技术上下文的色情请求）
+  - 显著减少误判率，提升用户体验
+
+#### 🔧 技术细节
+
+- 新增 `_extractSmartContent()` 方法：智能提取关键内容片段
+- 新增 `_isDegraded()` / `_triggerDegradation()` / `_resetDegradation()`：降级状态管理
+- 新增 `_recordPerformanceSuccess()` / `_recordPerformanceFailure()`：性能监控
+- 在 `_callModerationAPI()` 中集成性能监控逻辑
+- 优化 `systemPrompt`：更宽松的审核规则
+
+#### 📝 配置新增
+
+```javascript
+// 性能监控与降级
+performanceMonitoringEnabled: true,  // 启用性能监控
+slowResponseThreshold: 10000,        // 慢响应阈值（10秒）
+maxConsecutiveFailures: 3,           // 连续失败阈值
+degradationDuration: 300000,         // 降级持续时间（5分钟）
+
+// 智能提取
+maxContentLength: 1000,              // 每个片段截取字符数（默认1000）
+```
+
 ### v2.4.0 (2025-10-28) - 优化审核策略避免TPM超限
 
 - ✨ **重要变更**：不再包含 assistant 回复，仅审核用户最后一次输入
@@ -1013,6 +1110,6 @@ A: 因为：
 
 ---
 
-**最后更新**：2025-10-28
-**版本**：2.4.0
+**最后更新**：2025-11-02
+**版本**：2.5.0
 **维护者**：小红帽AI审核团队

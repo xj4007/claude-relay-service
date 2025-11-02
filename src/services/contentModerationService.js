@@ -31,15 +31,25 @@ class ContentModerationService {
     this.retryDelay = config.contentModeration?.retryDelay || 1000
     this.failStrategy = config.contentModeration?.failStrategy || 'fail-close'
 
-    // ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗）
+    // ✂️ 智能提取配置：每个消息片段截取的最大字符数（减少token消耗）
     this.maxContentLength = config.contentModeration?.maxContentLength || 1000
 
     // 🔥 熔断机制配置：检测到故障后自动停用审核一段时间
     this.circuitBreakerEnabled = config.contentModeration?.circuitBreakerEnabled !== false
-    this.circuitBreakerDuration =
-      config.contentModeration?.circuitBreakerDuration || 5 * 60 * 1000 // 默认5分钟
+    this.circuitBreakerDuration = config.contentModeration?.circuitBreakerDuration || 5 * 60 * 1000 // 默认5分钟
     this.circuitBreakerTripped = false // 熔断器是否触发
     this.circuitBreakerTrippedAt = null // 熔断触发时间
+
+    // 🚨 性能监控配置：监控硅基流动API性能，自动降级
+    this.performanceMonitoringEnabled =
+      config.contentModeration?.performanceMonitoringEnabled !== false
+    this.slowResponseThreshold = config.contentModeration?.slowResponseThreshold || 10000 // 慢响应阈值（毫秒，默认10秒）
+    this.maxConsecutiveFailures = config.contentModeration?.maxConsecutiveFailures || 3 // 连续失败次数阈值
+    this.degradationDuration = config.contentModeration?.degradationDuration || 5 * 60 * 1000 // 降级持续时间（默认5分钟）
+    this.consecutiveFailures = 0 // 当前连续失败次数
+    this.lastSuccessTime = Date.now() // 最后成功时间
+    this.isDegraded = false // 是否处于降级状态
+    this.degradedAt = null // 降级开始时间
 
     // 📊 记录每个Key的使用情况
     this.keyStats = this.apiKeys.map((key, index) => ({
@@ -62,31 +72,39 @@ class ContentModerationService {
           `🔥 Circuit breaker enabled: will disable moderation for ${this.circuitBreakerDuration / 1000}s on failure`
         )
       }
+      if (this.performanceMonitoringEnabled) {
+        logger.info(
+          `🚨 Performance monitoring enabled: slow threshold=${this.slowResponseThreshold}ms, max failures=${this.maxConsecutiveFailures}, degradation=${this.degradationDuration / 1000}s`
+        )
+      }
     }
 
-    // 🛡️ 审核系统提示词（严格版：默认拒绝，仅对明确编程场景放行）
-    this.systemPrompt = `You are a content moderator for a CODING platform. Return JSON only.
+    // 🛡️ 审核系统提示词（优化版：宽松对待情绪发泄，严格禁止纯NSFW）
+    this.systemPrompt = `You are a content moderator. Return JSON only.
+
+⚠️ IMPORTANT: The input is TRUNCATED (first ~${this.maxContentLength} chars each), not complete content.
 
 FORMAT:
-{"status":"true","words":["word1"]} = BLOCK (NSFW detected)
-{"status":"false","words":[]} = ALLOW (safe)
+{"status":"true","words":["word1"]} = BLOCK (pure NSFW detected)
+{"status":"false","words":[]} = ALLOW (safe or acceptable)
 
-DEFAULT RULE: **BLOCK all NSFW content by default.**
-
-ONLY ALLOW if message contains ALL of these:
-1. Programming keywords: code/function/API/implement/debug/class/variable/bug/error/algorithm/filter/detection/library/package/module/import/export/实现/算法/函数/代码/调试/错误/过滤器/检测
-2. Clear technical context (code syntax, technical question, debugging)
+RULES:
+1. **ALLOW emotional venting** (frustration, complaints, mild profanity) - users need to express emotions
+2. **ALLOW violent metaphors in casual context** (e.g., "this bug is killing me", "I'll destroy this code")
+3. **BLOCK pure sexual/pornographic content** (explicit NSFW requests with NO technical context)
+4. **ALLOW if ANY technical context exists** (code/API/debug/algorithm/function/implement/检测/算法/实现)
 
 EXAMPLES:
-✅ "implement nsfw_filter() function" → SAFE (has "implement"+"function"+code)
-✅ "我的色情检测算法报错" → SAFE (has "算法"+"报错"+tech context)
-✅ "debug: porn_blocker API error" → SAFE (has "debug"+"API"+"error")
-❌ "nsfw" → BLOCK (no programming keywords)
-❌ "我要看色情内容" → BLOCK (no tech context)
-❌ "色情" → BLOCK (isolated word)
-❌ "show me porn" → BLOCK (no programming context)
+✅ "这代码真他妈难写" → ALLOW (frustration, technical context)
+✅ "我要杀了这个bug" → ALLOW (violent metaphor, debugging context)
+✅ "帮我实现nsfw检测" → ALLOW (technical: implement + detection)
+✅ "操，又报错了" → ALLOW (frustration + error context)
+✅ "给我暴力破解这个算法" → ALLOW (technical: algorithm)
+❌ "我要看色情内容" → BLOCK (pure NSFW, NO technical context)
+❌ "给我黄色视频" → BLOCK (pure NSFW request)
+❌ "nsfw" (isolated) → BLOCK (no context at all)
 
-IF NO programming keywords found → ALWAYS BLOCK.`
+When in doubt → ALLOW (better false negative than false positive).`
   }
 
   /**
@@ -110,40 +128,41 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       return { passed: true }
     }
 
-    try {
-      // 提取最后一条用户消息
-      const lastUserMessage = this._extractLastUserMessage(requestBody)
+    // 🚨 降级检查：如果处于降级状态，直接放行所有请求
+    if (this.performanceMonitoringEnabled && this._isDegraded()) {
+      const remainingTime = this._getDegradationRemainingTime()
+      logger.warn(
+        `🚨 Performance degradation ACTIVE, bypassing moderation (${Math.ceil(remainingTime / 1000)}s remaining, failures: ${this.consecutiveFailures})`
+      )
+      return { passed: true }
+    }
 
-      // 如果用户消息为空，直接通过
-      if (!lastUserMessage || lastUserMessage.trim().length === 0) {
-        logger.warn('⚠️ No user message found for moderation')
+    try {
+      // 智能提取审核内容（最后user 50字 + 前一次assistant 50字 + 倒数第二user 50字）
+      const contentToModerate = this._extractSmartContent(requestBody)
+
+      // 如果提取内容为空，直接通过
+      if (!contentToModerate || contentToModerate.trim().length === 0) {
+        logger.warn('⚠️ No content found for moderation')
         return { passed: true }
       }
 
-      logger.info(
-        `🔍 Phase 1: Moderating last user message using ${this.model} (with Pro fallback: ${this.proModel})`
-      )
+      logger.info(`🔍 Phase 1: Moderating content with default model ${this.model}`)
 
-      // ========== 第一阶段：最后一次用户输入审核（启用模型级联：默认模型 → Pro模型） ==========
-      const firstResult = await this._callModerationAPIWithRetry(lastUserMessage, null)
+      // ========== 第一阶段：默认模型初次审核 ==========
+      const firstResult = await this._callModerationAPIWithRetry(contentToModerate, null)
 
-      // 情况1：API调用失败 - 触发熔断器并根据failStrategy决定策略
+      // 情况1：API调用失败
       if (!firstResult.success) {
-        // 🔥 触发熔断器：检测到审核服务故障
-        this._tripCircuitBreaker()
-
+        // 🔥 触发熔断器（已在_callModerationAPI中处理）
         if (this.failStrategy === 'fail-open') {
           logger.warn(
-            '⚠️ Phase 1 moderation API failed after all retries, but using FAIL-OPEN strategy, ALLOWING request'
-          )
-          logger.warn(
-            '   Reason: Content moderation service unavailable, allowing request to proceed to avoid blocking legitimate users'
+            '⚠️ Phase 1 moderation API failed, but using FAIL-OPEN strategy, ALLOWING request'
           )
           return { passed: true }
         } else {
-          // fail-close 策略（默认）
           logger.error(
-            '❌ Phase 1 moderation API failed after all retries, using FAIL-CLOSE strategy, BLOCKING request'
+            '❌ Phase 1 moderation API failed, using FAIL-CLOSE strategy, BLOCKING request'
           )
           return {
             passed: false,
@@ -155,95 +174,46 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
       // 情况2：第一次通过 - 直接放行
       if (firstResult.data.status === 'false') {
-        logger.info('✅ Phase 1: User message passed moderation, allowing request')
+        logger.info('✅ Phase 1: Content passed moderation, allowing request')
         return { passed: true }
       }
 
-      // 情况3：第一次判定违规 (status="true") → 尝试获取倒数第二次用户输入合并校验
+      // 情况3：第一次判定违规 → 使用高级模型复核
       if (firstResult.data.status === 'true') {
         logger.warn(
-          `⚠️ Phase 1: Last user message BLOCKED, trying with last two messages combined...`
+          `⚠️ Phase 1: Content flagged by default model, using advanced model ${this.advancedModel} for verification...`
         )
+        logger.warn(`   Flagged words: [${firstResult.data.sensitiveWords.join(', ')}]`)
 
-        // 获取倒数第二次用户输入
-        const lastTwoMessages = this._extractLastTwoUserMessages(requestBody)
-
-        // 如果只有一条消息（没有倒数第二条），直接进入高级模型验证
-        if (lastTwoMessages === lastUserMessage) {
-          logger.info('ℹ️ Only one user message found, skipping Phase 2, going to Phase 3')
-        } else {
-          logger.info(
-            `🔍 Phase 2: Moderating last two user messages combined using ${this.model} (with Pro fallback: ${this.proModel})`
-          )
-
-          // ========== 第二阶段：倒数两次用户输入合并审核 ==========
-          const secondResult = await this._callModerationAPIWithRetry(lastTwoMessages, null)
-
-          // 第二次API调用失败 - 触发熔断器并根据failStrategy决定策略
-          if (!secondResult.success) {
-            // 🔥 触发熔断器
-            this._tripCircuitBreaker()
-
-            if (this.failStrategy === 'fail-open') {
-              logger.warn(
-                '⚠️ Phase 2 moderation API failed, but using FAIL-OPEN strategy, ALLOWING request'
-              )
-              logger.warn(
-                '   Reason: Cannot determine context with two messages, allowing to avoid false positives'
-              )
-              return { passed: true }
-            } else {
-              // fail-close 策略（默认）- 保守策略，使用第一次审核结果拒绝请求
-              logger.error(
-                '❌ Phase 2 moderation API failed, applying FAIL-CLOSE policy, BLOCKING request'
-              )
-              this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
-              return {
-                passed: false,
-                message: this._formatErrorMessage(firstResult.data.sensitiveWords)
-              }
-            }
+        if (!this.enableSecondCheck) {
+          // 如果禁用二次审核，直接拒绝
+          logger.error('❌ Second check disabled, BLOCKING request directly')
+          this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
+          return {
+            passed: false,
+            message: this._formatErrorMessage(firstResult.data.sensitiveWords)
           }
-
-          // 第二次通过 → 可能是技术讨论，放行
-          if (secondResult.data.status === 'false') {
-            logger.info(
-              '✅ Phase 2: Last two messages passed moderation (likely technical discussion), allowing request'
-            )
-            return { passed: true }
-          }
-
-          // 第二次仍然违规 → 使用高级模型进行最终验证
-          logger.warn(
-            `⚠️ Phase 2: Last two messages still BLOCKED, using advanced model ${this.advancedModel} for final check...`
-          )
         }
 
-        // ========== 第三阶段：高级模型最终验证 ==========
-        logger.info(`🔍 Phase 3: Final verification with advanced model ${this.advancedModel}`)
+        // ========== 第二阶段：高级模型复核 ==========
+        logger.info(`🔍 Phase 2: Verification with advanced model ${this.advancedModel}`)
 
-        const finalResult = await this._callModerationAPIWithRetry(
-          lastTwoMessages,
+        const secondResult = await this._callModerationAPIWithRetry(
+          contentToModerate,
           this.advancedModel
         )
 
-        // 第三次API调用失败 - 触发熔断器并根据failStrategy决定策略
-        if (!finalResult.success) {
-          // 🔥 触发熔断器
-          this._tripCircuitBreaker()
-
+        // 第二次API调用失败
+        if (!secondResult.success) {
           if (this.failStrategy === 'fail-open') {
             logger.warn(
-              '⚠️ Phase 3 (advanced model) failed, but using FAIL-OPEN strategy, ALLOWING request'
-            )
-            logger.warn(
-              '   Reason: Advanced moderation service unavailable, allowing to avoid false positives'
+              '⚠️ Phase 2 (advanced model) failed, but using FAIL-OPEN strategy, ALLOWING request'
             )
             return { passed: true }
           } else {
-            // fail-close 策略（默认）- 保守策略，使用第一次审核结果拒绝请求
+            // fail-close 策略：使用第一次审核结果拒绝请求
             logger.error(
-              '❌ Phase 3 (advanced model) failed, applying FAIL-CLOSE policy, BLOCKING request'
+              '❌ Phase 2 (advanced model) failed, applying FAIL-CLOSE policy, BLOCKING request'
             )
             this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
             return {
@@ -254,21 +224,21 @@ IF NO programming keywords found → ALWAYS BLOCK.`
         }
 
         // 高级模型通过 → 误判纠正，放行
-        if (finalResult.data.status === 'false') {
+        if (secondResult.data.status === 'false') {
           logger.info(
-            `✅ Phase 3: Advanced model ${this.advancedModel} passed (false positive corrected), allowing request`
+            `✅ Phase 2: Advanced model ${this.advancedModel} passed (false positive corrected), allowing request`
           )
           return { passed: true }
         }
 
         // 高级模型仍然违规 → 确认违规，拒绝请求
         logger.error(
-          `🚫 Phase 3: CONFIRMED violation by advanced model ${this.advancedModel}, words: [${finalResult.data.sensitiveWords.join(', ')}]`
+          `🚫 Phase 2: CONFIRMED violation by advanced model ${this.advancedModel}, words: [${secondResult.data.sensitiveWords.join(', ')}]`
         )
-        this._logNSFWViolation(requestBody, finalResult.data.sensitiveWords, apiKeyInfo)
+        this._logNSFWViolation(requestBody, secondResult.data.sensitiveWords, apiKeyInfo)
         return {
           passed: false,
-          message: this._formatErrorMessage(finalResult.data.sensitiveWords)
+          message: this._formatErrorMessage(secondResult.data.sensitiveWords)
         }
       }
 
@@ -358,6 +328,114 @@ IF NO programming keywords found → ALWAYS BLOCK.`
     const elapsed = Date.now() - this.circuitBreakerTrippedAt
     const remaining = this.circuitBreakerDuration - elapsed
     return Math.max(0, remaining)
+  }
+
+  /**
+   * 🚨 检查是否处于降级状态
+   * @returns {boolean}
+   */
+  _isDegraded() {
+    if (!this.isDegraded) {
+      return false
+    }
+
+    const elapsed = Date.now() - this.degradedAt
+    if (elapsed >= this.degradationDuration) {
+      // 降级超时，自动重置
+      this._resetDegradation()
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * 🚨 触发降级（检测到性能问题）
+   * @param {string} reason - 降级原因
+   */
+  _triggerDegradation(reason) {
+    if (!this.performanceMonitoringEnabled) {
+      return
+    }
+
+    if (!this.isDegraded) {
+      this.isDegraded = true
+      this.degradedAt = Date.now()
+      logger.error(
+        `🚨 PERFORMANCE DEGRADATION TRIGGERED! Reason: ${reason}. Moderation service disabled for ${this.degradationDuration / 1000}s`
+      )
+      logger.error(
+        `   All subsequent requests will BYPASS moderation until degradation period ends`
+      )
+      logger.error(`   Consecutive failures: ${this.consecutiveFailures}`)
+    }
+  }
+
+  /**
+   * 🚨 重置降级状态
+   */
+  _resetDegradation() {
+    if (this.isDegraded) {
+      logger.info('🚨 Performance degradation RESET, moderation service re-enabled')
+      logger.info(`   Will monitor performance again. Last failures: ${this.consecutiveFailures}`)
+      this.isDegraded = false
+      this.degradedAt = null
+      this.consecutiveFailures = 0 // 重置失败计数
+    }
+  }
+
+  /**
+   * 🚨 获取降级剩余时间（毫秒）
+   * @returns {number}
+   */
+  _getDegradationRemainingTime() {
+    if (!this.isDegraded) {
+      return 0
+    }
+
+    const elapsed = Date.now() - this.degradedAt
+    const remaining = this.degradationDuration - elapsed
+    return Math.max(0, remaining)
+  }
+
+  /**
+   * 🚨 记录API调用成功（重置性能计数器）
+   */
+  _recordPerformanceSuccess() {
+    if (!this.performanceMonitoringEnabled) {
+      return
+    }
+
+    // 成功调用，重置失败计数
+    if (this.consecutiveFailures > 0) {
+      logger.info(
+        `✅ API call succeeded, resetting failure count (was: ${this.consecutiveFailures})`
+      )
+      this.consecutiveFailures = 0
+    }
+    this.lastSuccessTime = Date.now()
+  }
+
+  /**
+   * 🚨 记录API调用失败或慢响应（累加失败计数，可能触发降级）
+   * @param {string} reason - 失败原因
+   */
+  _recordPerformanceFailure(reason) {
+    if (!this.performanceMonitoringEnabled) {
+      return
+    }
+
+    this.consecutiveFailures++
+    logger.warn(
+      `⚠️ Performance issue detected: ${reason} (consecutive failures: ${this.consecutiveFailures}/${this.maxConsecutiveFailures})`
+    )
+
+    // 达到阈值，触发降级
+    if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
+      this._triggerDegradation(
+        `Reached ${this.maxConsecutiveFailures} consecutive failures/slow responses`
+      )
+    }
   }
 
   /**
@@ -451,6 +529,74 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       this.keyStats[keyIndex].failureCount++
       logger.warn(`❌ Key ${keyIndex + 1} failure: ${this.keyStats[keyIndex].failureCount} times`)
     }
+  }
+
+  /**
+   * 智能提取审核内容（优化版：截取关键片段，减少token消耗）
+   * 提取策略：
+   * 1. 最后一次用户输入（截取前N字符，N由maxContentLength配置）
+   * 2. 前一次assistant回复（如果存在，截取前N字符）
+   * 3. 倒数第二次用户输入（如果存在，截取前N字符）
+   *
+   * @param {Object} requestBody - Claude API 请求体
+   * @returns {string} 组合后的审核内���
+   */
+  _extractSmartContent(requestBody) {
+    if (!requestBody.messages || !Array.isArray(requestBody.messages)) {
+      return ''
+    }
+
+    const messages = requestBody.messages
+    const parts = []
+    let foundLastUser = false
+    let foundAssistant = false
+    let foundSecondUser = false
+
+    // 倒序遍历消息
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      let content = ''
+
+      // 提取文本内容
+      if (typeof message.content === 'string') {
+        content = message.content
+      } else if (Array.isArray(message.content)) {
+        const textContents = message.content
+          .filter((item) => item.type === 'text')
+          .map((item) => item.text)
+        content = textContents.join('\n')
+      }
+
+      if (!content.trim()) {
+        continue
+      }
+
+      // 截取前N字符（由配置决定）
+      const truncated = content.substring(0, this.maxContentLength)
+
+      // 按顺序提取：最后user → 前一次assistant → 倒数第二user
+      if (message.role === 'user' && !foundLastUser) {
+        // 最后一次用户输入
+        parts.unshift(`User: ${truncated}`)
+        foundLastUser = true
+      } else if (message.role === 'assistant' && foundLastUser && !foundAssistant) {
+        // 前一次assistant回复
+        parts.unshift(`Assistant: ${truncated}`)
+        foundAssistant = true
+      } else if (message.role === 'user' && foundLastUser && !foundSecondUser) {
+        // 倒数第二次用户输入
+        parts.unshift(`User(prev): ${truncated}`)
+        foundSecondUser = true
+        break // 已经收集够了，停止
+      }
+    }
+
+    // 组合内容，用双换行分隔
+    const combined = parts.join('\n\n')
+    logger.info(
+      `📝 Smart content extraction: ${parts.length} parts, total ${combined.length} chars`
+    )
+    return combined
   }
 
   /**
@@ -787,6 +933,17 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
       logger.info(`📥 Moderation API (${model}) responded in ${duration}ms`)
 
+      // 🚨 性能监控：检查响应时间
+      if (this.performanceMonitoringEnabled) {
+        if (duration > this.slowResponseThreshold) {
+          this._recordPerformanceFailure(
+            `Slow response: ${duration}ms > ${this.slowResponseThreshold}ms`
+          )
+        } else {
+          this._recordPerformanceSuccess()
+        }
+      }
+
       // 解析响应
       if (response.data && response.data.choices && response.data.choices[0]) {
         const { content } = response.data.choices[0].message
@@ -796,12 +953,20 @@ IF NO programming keywords found → ALWAYS BLOCK.`
 
         if (!result) {
           logger.error('❌ Failed to parse JSON from API response')
+          // 🚨 解析失败也算性能问题
+          if (this.performanceMonitoringEnabled) {
+            this._recordPerformanceFailure('JSON parse failure')
+          }
           return { success: false }
         }
 
         // 验证响应格式
         if (typeof result.status !== 'string') {
           logger.error('❌ Invalid API response format: missing or invalid status field')
+          // 🚨 格式错误也算性能问题
+          if (this.performanceMonitoringEnabled) {
+            this._recordPerformanceFailure('Invalid response format')
+          }
           return { success: false }
         }
 
@@ -820,16 +985,33 @@ IF NO programming keywords found → ALWAYS BLOCK.`
       }
 
       logger.error('❌ Invalid API response structure')
+      // 🚨 响应结构错误
+      if (this.performanceMonitoringEnabled) {
+        this._recordPerformanceFailure('Invalid response structure')
+      }
       return { success: false }
     } catch (error) {
+      // 🚨 异常情况都算性能问题
       if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
         logger.error(`❌ Moderation API timeout (${this.timeout}ms):`, error.message)
+        if (this.performanceMonitoringEnabled) {
+          this._recordPerformanceFailure(`Timeout: ${this.timeout}ms`)
+        }
       } else if (error.response) {
         logger.error(`❌ Moderation API HTTP error ${error.response.status}:`, error.response.data)
+        if (this.performanceMonitoringEnabled) {
+          this._recordPerformanceFailure(`HTTP ${error.response.status} error`)
+        }
       } else if (error.request) {
         logger.error('❌ Moderation API no response received:', error.message)
+        if (this.performanceMonitoringEnabled) {
+          this._recordPerformanceFailure('No response received')
+        }
       } else {
         logger.error('❌ Moderation API call failed:', error.message)
+        if (this.performanceMonitoringEnabled) {
+          this._recordPerformanceFailure(`Request failed: ${error.message}`)
+        }
       }
       return { success: false }
     }
