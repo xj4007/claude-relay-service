@@ -157,6 +157,69 @@ router.get('/users', authenticateAdmin, async (req, res) => {
   }
 })
 
+// 🔄 并发计数管理
+
+// 获取所有并发记录（包括活跃和过期的）
+router.get('/concurrency/all', authenticateAdmin, async (req, res) => {
+  try {
+    const allRecords = await redis.getAllConcurrencyRecords()
+    return res.json({
+      success: true,
+      data: allRecords,
+      totalKeys: allRecords.length,
+      totalRecords: allRecords.reduce((sum, item) => sum + item.total, 0),
+      totalExpired: allRecords.reduce((sum, item) => sum + item.expired, 0),
+      totalActive: allRecords.reduce((sum, item) => sum + item.active, 0)
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get all concurrency records:', error)
+    return res.status(500).json({
+      error: 'Failed to get concurrency records',
+      message: error.message
+    })
+  }
+})
+
+// 获取过期/陈旧的并发记录
+router.get('/concurrency/stale', authenticateAdmin, async (req, res) => {
+  try {
+    const { maxAgeMinutes = 5 } = req.query
+    const staleRecords = await redis.getStaleConcurrencyRecords(parseInt(maxAgeMinutes))
+    return res.json({
+      success: true,
+      data: staleRecords,
+      totalKeys: staleRecords.length,
+      totalStale: staleRecords.reduce((sum, item) => sum + item.total, 0),
+      maxAgeMinutes: parseInt(maxAgeMinutes)
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get stale concurrency records:', error)
+    return res.status(500).json({
+      error: 'Failed to get stale concurrency records',
+      message: error.message
+    })
+  }
+})
+
+// 强制清理所有过期的并发记录
+router.post('/concurrency/force-cleanup', authenticateAdmin, async (req, res) => {
+  try {
+    logger.info(`🧹 Admin ${req.admin.username} triggered force cleanup of concurrency records`)
+    const result = await redis.forceCleanupAllConcurrency()
+    return res.json({
+      success: true,
+      message: `Successfully cleaned ${result.totalCleaned} stale concurrency records`,
+      data: result
+    })
+  } catch (error) {
+    logger.error('❌ Failed to force cleanup concurrency:', error)
+    return res.status(500).json({
+      error: 'Failed to force cleanup concurrency',
+      message: error.message
+    })
+  }
+})
+
 // 🔑 API Keys 管理
 
 // 调试：获取API Key费用详情

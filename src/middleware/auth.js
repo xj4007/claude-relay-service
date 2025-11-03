@@ -247,6 +247,7 @@ const authenticateApiKey = async (req, res, next) => {
       // 使用标志位确保只减少一次
       let concurrencyDecremented = false
       let leaseRenewInterval = null
+      let absoluteTimeoutHandle = null
 
       if (renewIntervalMs > 0) {
         leaseRenewInterval = setInterval(() => {
@@ -272,6 +273,10 @@ const authenticateApiKey = async (req, res, next) => {
             clearInterval(leaseRenewInterval)
             leaseRenewInterval = null
           }
+          if (absoluteTimeoutHandle) {
+            clearTimeout(absoluteTimeoutHandle)
+            absoluteTimeoutHandle = null
+          }
           try {
             const newCount = await redis.decrConcurrency(validation.keyData.id, requestId)
             logger.api(
@@ -281,6 +286,28 @@ const authenticateApiKey = async (req, res, next) => {
             logger.error(`Failed to decrement concurrency for key ${validation.keyData.id}:`, error)
           }
         }
+      }
+
+      // 🛡️ Absolute timeout enforcer - force cleanup after REQUEST_TIMEOUT
+      // This is a safety net to ensure concurrency is ALWAYS released
+      // even if all event listeners fail to fire (network hangs, crashes, etc.)
+      const absoluteTimeoutMs = config.requestTimeout || 600000 // 10 minutes default
+      absoluteTimeoutHandle = setTimeout(() => {
+        if (!concurrencyDecremented) {
+          const elapsed = Date.now() - startTime
+          logger.warn(
+            `⏱️ Absolute timeout enforcer triggered for key: ${validation.keyData.id} (${validation.keyData.name}) after ${elapsed}ms`
+          )
+          logger.warn(
+            `⚠️ Forcing concurrency cleanup - this indicates a possible issue with request lifecycle`
+          )
+          decrementConcurrency()
+        }
+      }, absoluteTimeoutMs)
+
+      // Prevent timeout from blocking Node.js exit
+      if (typeof absoluteTimeoutHandle.unref === 'function') {
+        absoluteTimeoutHandle.unref()
       }
 
       // 监听最可靠的事件（避免重复监听）

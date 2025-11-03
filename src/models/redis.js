@@ -1807,6 +1807,150 @@ class RedisClient {
     return await this.getConcurrency(compositeKey)
   }
 
+  // 🔍 获取所有并发记录（包括过期和活跃的）
+  // 返回格式: [{ key, apiKeyId, records: [{ requestId, expireAt, age, isExpired }], total, expired }]
+  async getAllConcurrencyRecords() {
+    try {
+      const keys = await this.client.keys('concurrency:*')
+      const now = Date.now()
+      const results = []
+
+      for (const key of keys) {
+        // 跳过非账户键（如辅助数据键）
+        if (
+          key.includes(':slow_responses') ||
+          key.includes(':5xx_errors') ||
+          key.includes(':temp_error')
+        ) {
+          continue
+        }
+
+        const members = await this.client.zrange(key, 0, -1, 'WITHSCORES')
+        const records = []
+
+        for (let i = 0; i < members.length; i += 2) {
+          const requestId = members[i]
+          const expireAt = parseInt(members[i + 1])
+          const age = now - (expireAt - 300000) // Assuming 300s lease
+          const isExpired = expireAt < now
+
+          records.push({
+            requestId,
+            expireAt,
+            expireAtDate: new Date(expireAt).toISOString(),
+            ageMs: age,
+            ageSeconds: Math.floor(age / 1000),
+            ageMinutes: Math.floor(age / 60000),
+            ageHours: Math.floor(age / 3600000),
+            isExpired
+          })
+        }
+
+        if (records.length > 0) {
+          const apiKeyId = key.replace('concurrency:', '')
+          const expiredCount = records.filter((r) => r.isExpired).length
+
+          results.push({
+            key,
+            apiKeyId,
+            records,
+            total: records.length,
+            expired: expiredCount,
+            active: records.length - expiredCount
+          })
+        }
+      }
+
+      return results
+    } catch (error) {
+      logger.error('❌ Failed to get all concurrency records:', error)
+      return []
+    }
+  }
+
+  // 🧹 获取所有过期的并发记录
+  async getStaleConcurrencyRecords(maxAgeMinutes = 5) {
+    try {
+      const allRecords = await this.getAllConcurrencyRecords()
+      const now = Date.now()
+      const maxAgeMs = maxAgeMinutes * 60 * 1000
+
+      return allRecords
+        .map((item) => ({
+          ...item,
+          records: item.records.filter((r) => r.isExpired || r.ageMs > maxAgeMs)
+        }))
+        .filter((item) => item.records.length > 0)
+        .map((item) => ({
+          ...item,
+          expired: item.records.filter((r) => r.isExpired).length,
+          stale: item.records.filter((r) => r.ageMs > maxAgeMs).length,
+          total: item.records.length
+        }))
+    } catch (error) {
+      logger.error('❌ Failed to get stale concurrency records:', error)
+      return []
+    }
+  }
+
+  // 🧹 强制清理所有过期的并发记录
+  async forceCleanupAllConcurrency() {
+    try {
+      const keys = await this.client.keys('concurrency:*')
+      const now = Date.now()
+      let totalCleaned = 0
+      const results = []
+
+      for (const key of keys) {
+        // 跳过非账户键
+        if (
+          key.includes(':slow_responses') ||
+          key.includes(':5xx_errors') ||
+          key.includes(':temp_error')
+        ) {
+          continue
+        }
+
+        const beforeCount = await this.client.zcard(key)
+        const removed = await this.client.zremrangebyscore(key, '-inf', now)
+
+        if (removed > 0) {
+          totalCleaned += removed
+          const afterCount = await this.client.zcard(key)
+          const apiKeyId = key.replace('concurrency:', '')
+
+          results.push({
+            key,
+            apiKeyId,
+            beforeCount,
+            afterCount,
+            removed
+          })
+
+          logger.info(
+            `🧹 Cleaned ${removed} stale concurrency records from ${apiKeyId} (${beforeCount} → ${afterCount})`
+          )
+
+          // If no records left, delete the key
+          if (afterCount === 0) {
+            await this.client.del(key)
+            logger.info(`🗑️ Deleted empty concurrency key: ${key}`)
+          }
+        }
+      }
+
+      logger.info(`🧹 Force cleanup completed: ${totalCleaned} total stale records removed`)
+      return {
+        totalCleaned,
+        keysProcessed: keys.length,
+        results
+      }
+    } catch (error) {
+      logger.error('❌ Failed to force cleanup concurrency:', error)
+      throw error
+    }
+  }
+
   // 🔧 Basic Redis operations wrapper methods for convenience
   async get(key) {
     const client = this.getClientSafe()

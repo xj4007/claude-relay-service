@@ -315,8 +315,47 @@ class Application {
             }
           }
 
+          // 🔍 检查陈旧的并发记录（5分钟以上）
+          let concurrencyHealth = { status: 'healthy' }
+          try {
+            const staleRecords = await redis.getStaleConcurrencyRecords(5)
+            const totalStale = staleRecords.reduce((sum, item) => sum + item.total, 0)
+
+            if (totalStale > 0) {
+              const oldestAge = Math.max(
+                ...staleRecords.flatMap((item) => item.records.map((r) => r.ageMinutes))
+              )
+              concurrencyHealth = {
+                status: totalStale > 10 ? 'warning' : 'degraded',
+                staleRecords: totalStale,
+                affectedKeys: staleRecords.length,
+                oldestAgeMinutes: oldestAge,
+                message:
+                  totalStale > 10
+                    ? `Found ${totalStale} stale concurrency records - cleanup may be failing`
+                    : `Found ${totalStale} stale concurrency records - monitoring`
+              }
+            }
+          } catch (error) {
+            logger.error('❌ Failed to check concurrency health:', error)
+            concurrencyHealth = {
+              status: 'unknown',
+              error: error.message
+            }
+          }
+
+          // 决定整体健康状态
+          let overallStatus = 'healthy'
+          if (redisHealth.status !== 'healthy' || loggerHealth.status !== 'healthy') {
+            overallStatus = 'unhealthy'
+          } else if (concurrencyHealth.status === 'warning') {
+            overallStatus = 'warning'
+          } else if (concurrencyHealth.status === 'degraded') {
+            overallStatus = 'degraded'
+          }
+
           const health = {
-            status: 'healthy',
+            status: overallStatus,
             service: 'claude-relay-service',
             version,
             timestamp: new Date().toISOString(),
@@ -328,7 +367,8 @@ class Application {
             },
             components: {
               redis: redisHealth,
-              logger: loggerHealth
+              logger: loggerHealth,
+              concurrency: concurrencyHealth
             },
             stats: logger.getStats()
           }
@@ -565,61 +605,64 @@ class Application {
       `🚨 Rate limit cleanup service started (checking every ${cleanupIntervalMinutes} minutes)`
     )
 
-    // 🔢 启动并发计数自动清理任务（Phase 1 修复：解决并发泄漏问题）
+    // 🔢 启动并发计数自动清理任务（增强版：解决并发泄漏问题）
     // 每分钟主动清理所有过期的并发项，不依赖请求触发
     setInterval(async () => {
+      const startTime = Date.now()
       try {
-        const keys = await redis.keys('concurrency:*')
-        if (keys.length === 0) {
-          return
-        }
+        // 使用新的 forceCleanupAllConcurrency 方法，提供更好的日志和指标
+        const result = await redis.forceCleanupAllConcurrency()
 
-        const now = Date.now()
-        let totalCleaned = 0
+        if (result.totalCleaned > 0) {
+          const elapsed = Date.now() - startTime
+          logger.info(
+            `🔢 Concurrency cleanup: cleaned ${result.totalCleaned} stale records from ${result.results.length} keys in ${elapsed}ms`
+          )
 
-        // 使用 Lua 脚本批量清理所有过期项
-        for (const key of keys) {
-          try {
-            const cleaned = await redis.client.eval(
-              `
-              local key = KEYS[1]
-              local now = tonumber(ARGV[1])
-
-              -- 清理过期项
-              redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
-
-              -- 获取剩余计数
-              local count = redis.call('ZCARD', key)
-
-              -- 如果计数为0，删除键
-              if count <= 0 then
-                redis.call('DEL', key)
-                return 1
-              end
-
-              return 0
-            `,
-              1,
-              key,
-              now
+          // 🚨 如果清理了大量陈旧记录，记录警告（可能表示存在问题）
+          if (result.totalCleaned > 10) {
+            logger.warn(
+              `⚠️ Cleaned ${result.totalCleaned} stale concurrency records - this may indicate cleanup issues`
             )
-            if (cleaned === 1) {
-              totalCleaned++
-            }
-          } catch (error) {
-            logger.error(`❌ Failed to clean concurrency key ${key}:`, error)
+            logger.warn(`⚠️ Details: ${JSON.stringify(result.results.slice(0, 5))}`) // 只记录前5个
+          }
+
+          // 记录详细的清理信息（调试级别）
+          for (const item of result.results) {
+            logger.debug(
+              `  🧹 Cleaned ${item.removed} records from ${item.apiKeyId} (${item.beforeCount} → ${item.afterCount})`
+            )
+          }
+        } else {
+          // 定期记录清理任务正常运行（每10次记录一次）
+          if (Math.random() < 0.1) {
+            logger.debug('🔢 Concurrency cleanup: no stale records found')
           }
         }
 
-        if (totalCleaned > 0) {
-          logger.info(`🔢 Concurrency cleanup: cleaned ${totalCleaned} expired keys`)
+        // 检查是否有任何记录超过5分钟仍未清理（表示可能的严重问题）
+        const staleRecords = await redis.getStaleConcurrencyRecords(5)
+        if (staleRecords.length > 0) {
+          const oldestAge = Math.max(
+            ...staleRecords.flatMap((item) => item.records.map((r) => r.ageMinutes))
+          )
+          logger.warn(
+            `⚠️ Found ${staleRecords.length} keys with records older than 5 minutes (oldest: ${oldestAge} minutes)`
+          )
         }
       } catch (error) {
-        logger.error('❌ Concurrency cleanup task failed:', error)
+        const elapsed = Date.now() - startTime
+        logger.error(`❌ Concurrency cleanup task failed after ${elapsed}ms:`, {
+          error: error.message,
+          stack: error.stack
+        })
+        // 清理任务失败不应该使服务器崩溃，只记录错误
       }
     }, 60000) // 每分钟执行一次
 
-    logger.info('🔢 Concurrency cleanup task started (running every 1 minute)')
+    logger.info(
+      '🔢 Enhanced concurrency cleanup task started (running every 1 minute with detailed monitoring)'
+    )
   }
 
   setupGracefulShutdown() {
