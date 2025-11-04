@@ -243,7 +243,7 @@ const config = {
     cacheCreateThreshold: parseFloat(process.env.SMART_CACHE_CREATE_THRESHOLD) || 0.15,
     // 缓存折扣比例（0-1之间），表示多少比例的cache_create转为cache_read
     // 例如 0.7 表示将70%的cache_create转为cache_read
-    discountRatio: parseFloat(process.env.SMART_CACHE_DISCOUNT_RATIO) || 0.7,
+    discountRatio: parseFloat(process.env.SMART_CACHE_DISCOUNT_RATIO) || 0.4,
     // 最小缓存tokens要求，低于此值不应用优化
     // 避免对小请求过度优化（小请求缓存收益不明显）
     minCacheTokens: parseInt(process.env.SMART_CACHE_MIN_TOKENS) || 10000

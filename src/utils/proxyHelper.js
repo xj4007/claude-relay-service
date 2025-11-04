@@ -13,9 +13,13 @@ class ProxyHelper {
    * @param {object|string|null} proxyConfig - 代理配置对象或 JSON 字符串
    * @param {object} options - 额外选项
    * @param {boolean|number} options.useIPv4 - 是否使用 IPv4 (true=IPv4, false=IPv6, undefined=auto)
+   * @param {boolean} options.strict - 严格模式：代理失败时抛出错误而不是返回null（默认false）
    * @returns {Agent|null} 代理 Agent 实例或 null
+   * @throws {Error} 严格模式下代理创建失败时抛出错误
    */
   static createProxyAgent(proxyConfig, options = {}) {
+    const { strict = false } = options
+
     if (!proxyConfig) {
       return null
     }
@@ -26,7 +30,11 @@ class ProxyHelper {
 
       // 验证必要字段
       if (!proxy.type || !proxy.host || !proxy.port) {
-        logger.warn('⚠️ Invalid proxy configuration: missing required fields (type, host, port)')
+        const errorMsg = 'Invalid proxy configuration: missing required fields (type, host, port)'
+        if (strict) {
+          throw new Error(errorMsg)
+        }
+        logger.warn(`⚠️ ${errorMsg}`)
         return null
       }
 
@@ -58,13 +66,49 @@ class ProxyHelper {
 
         return new HttpsProxyAgent(proxyUrl, httpOptions)
       } else {
-        logger.warn(`⚠️ Unsupported proxy type: ${proxy.type}`)
+        const errorMsg = `Unsupported proxy type: ${proxy.type}`
+        if (strict) {
+          throw new Error(errorMsg)
+        }
+        logger.warn(`⚠️ ${errorMsg}`)
         return null
       }
     } catch (error) {
+      if (strict) {
+        logger.error('🚫 Proxy creation failed (strict mode):', error.message)
+        // 创建包含完整信息的错误对象，便于上层识别和重试
+        const proxyError = new Error(`Proxy required but unavailable: ${error.message}`)
+        // 保留原始错误码（如 ECONNREFUSED, ETIMEDOUT 等）
+        proxyError.code = error.code || 'ECONNREFUSED'
+        // 标记为代理错误，用于重试逻辑识别
+        proxyError.isProxyError = true
+        // 保留原始错误对象
+        proxyError.originalError = error
+        throw proxyError
+      }
       logger.warn('⚠️ Failed to create proxy agent:', error.message)
       return null
     }
+  }
+
+  /**
+   * 安全地创建代理 Agent（强制代理模式）
+   * 当账户配置了代理但创建失败时，会抛出错误而不是返回null
+   * 这可以防止在代理不可用时fallback到直接连接而暴露真实IP
+   *
+   * @param {object|string|null} proxyConfig - 代理配置对象或 JSON 字符串
+   * @param {object} options - 额外选项
+   * @returns {Agent|null} 代理 Agent 实例，或 proxyConfig为null/undefined时返回null
+   * @throws {Error} 当proxyConfig存在但创建失败时抛出错误
+   */
+  static createProxyAgentStrict(proxyConfig, options = {}) {
+    // 如果没有配置代理，返回null（允许直接连接）
+    if (!proxyConfig) {
+      return null
+    }
+
+    // 有代理配置时，强制严格模式
+    return ProxyHelper.createProxyAgent(proxyConfig, { ...options, strict: true })
   }
 
   /**

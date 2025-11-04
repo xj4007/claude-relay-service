@@ -225,10 +225,16 @@ class DroidRelayService {
 
       // 获取代理配置
       const proxyConfig = account.proxy ? JSON.parse(account.proxy) : null
-      const proxyAgent = proxyConfig ? ProxyHelper.createProxyAgent(proxyConfig) : null
+      let proxyAgent = null
 
-      if (proxyAgent) {
-        logger.info(`🌐 Using proxy: ${ProxyHelper.getProxyDescription(proxyConfig)}`)
+      if (proxyConfig) {
+        try {
+          proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+          logger.info(`🌐 Using proxy: ${ProxyHelper.getProxyDescription(proxyConfig)}`)
+        } catch (proxyError) {
+          logger.error('❌ Droid 代理创建失败:', proxyError)
+          throw new Error(`代理配置错误：${proxyError.message}`)
+        }
       }
 
       // 构建请求头

@@ -124,12 +124,14 @@ function generateSetupTokenParams() {
 }
 
 /**
- * 创建代理agent（使用统一的代理工具）
+ * 创建代理agent（使用统一的代理工具，安全模式）
+ * 如果配置了代理但创建失败，会抛出错误防止IP泄露
  * @param {object|null} proxyConfig - 代理配置对象
  * @returns {object|null} 代理agent或null
+ * @throws {Error} 当配置了代理但创建失败时抛出错误
  */
 function createProxyAgent(proxyConfig) {
-  return ProxyHelper.createProxyAgent(proxyConfig)
+  return ProxyHelper.createProxyAgentStrict(proxyConfig)
 }
 
 /**

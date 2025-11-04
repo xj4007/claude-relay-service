@@ -1177,18 +1177,25 @@ class ClaudeConsoleAccountService {
   }
 
   // 🌐 创建代理agent（使用统一的代理工具）
+  // 使用严格模式：如果配置了代理但创建失败，会抛出错误防止IP泄露
   _createProxyAgent(proxyConfig) {
-    const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-    if (proxyAgent) {
+    if (!proxyConfig) {
+      logger.debug('🌐 No proxy configured for Claude Console request')
+      return null
+    }
+
+    try {
+      // 使用严格模式创建代理，失败时会抛出错误而不是返回null
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
       logger.info(
         `🌐 Using proxy for Claude Console request: ${ProxyHelper.getProxyDescription(proxyConfig)}`
       )
-    } else if (proxyConfig) {
-      logger.debug('🌐 Failed to create proxy agent for Claude Console')
-    } else {
-      logger.debug('🌐 No proxy configured for Claude Console request')
+      return proxyAgent
+    } catch (error) {
+      logger.error('🚫 Failed to create proxy agent (strict mode):', error.message)
+      // 严格模式下，代理失败必须抛出错误，防止fallback到直接连接
+      throw new Error(`Proxy required but unavailable: ${error.message}`)
     }
-    return proxyAgent
   }
 
   // 🔐 加密敏感数据

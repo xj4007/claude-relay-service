@@ -741,6 +741,7 @@ class ClaudeRelayService {
   }
 
   // 🌐 获取代理Agent（使用统一的代理工具）
+  // 使用严格模式：如果账户配置了代理但创建失败，会抛出错误防止IP泄露
   async _getProxyAgent(accountId) {
     try {
       const accountData = await claudeAccountService.getAllAccounts()
@@ -751,16 +752,16 @@ class ClaudeRelayService {
         return null
       }
 
-      const proxyAgent = ProxyHelper.createProxyAgent(account.proxy)
-      if (proxyAgent) {
-        logger.info(
-          `🌐 Using proxy for Claude request: ${ProxyHelper.getProxyDescription(account.proxy)}`
-        )
-      }
+      // 使用严格模式创建代理，失败时会抛出错误而不是返回null
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(account.proxy)
+      logger.info(
+        `🌐 Using proxy for Claude request: ${ProxyHelper.getProxyDescription(account.proxy)}`
+      )
       return proxyAgent
     } catch (error) {
-      logger.warn('⚠️ Failed to create proxy agent:', error)
-      return null
+      logger.error('🚫 Failed to create proxy agent (strict mode):', error.message)
+      // 严格模式下，代理失败必须抛出错误，防止fallback到直接连接
+      throw new Error(`Proxy required but unavailable: ${error.message}`)
     }
   }
 

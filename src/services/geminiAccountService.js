@@ -124,14 +124,17 @@ function createOAuth2Client(redirectUri = null, proxyConfig = null) {
 
   // 如果有代理配置，设置 transporterOptions
   if (proxyConfig) {
-    const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-    if (proxyAgent) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
       // 通过 transporterOptions 传递代理配置给底层的 Gaxios
       clientOptions.transporterOptions = {
         agent: proxyAgent,
         httpsAgent: proxyAgent
       }
       logger.debug('Created OAuth2Client with proxy configuration')
+    } catch (error) {
+      logger.error('Failed to create proxy agent for OAuth2Client:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
     }
   }
 
@@ -1067,7 +1070,6 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
   const CODE_ASSIST_API_VERSION = 'v1internal'
 
   const { token } = await client.getAccessToken()
-  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
 
   const tokenInfoConfig = {
     url: 'https://oauth2.googleapis.com/tokeninfo',
@@ -1080,10 +1082,17 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
     timeout: 15000
   }
 
-  if (proxyAgent) {
-    tokenInfoConfig.httpAgent = proxyAgent
-    tokenInfoConfig.httpsAgent = proxyAgent
-    tokenInfoConfig.proxy = false
+  // 如果有代理配置，使用 strict 模式创建代理
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      tokenInfoConfig.httpAgent = proxyAgent
+      tokenInfoConfig.httpsAgent = proxyAgent
+      tokenInfoConfig.proxy = false
+    } catch (error) {
+      logger.error('Failed to create proxy agent for tokeninfo:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   }
 
   try {
@@ -1103,10 +1112,17 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
     timeout: 15000
   }
 
-  if (proxyAgent) {
-    userInfoConfig.httpAgent = proxyAgent
-    userInfoConfig.httpsAgent = proxyAgent
-    userInfoConfig.proxy = false
+  // 如果有代理配置，使用 strict 模式创建代理
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      userInfoConfig.httpAgent = proxyAgent
+      userInfoConfig.httpsAgent = proxyAgent
+      userInfoConfig.proxy = false
+    } catch (error) {
+      logger.error('Failed to create proxy agent for userinfo:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   }
 
   try {
@@ -1149,13 +1165,19 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
   }
 
   // 添加代理配置
-  if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
-    axiosConfig.httpsAgent = proxyAgent
-    axiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini loadCodeAssist: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-    )
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      axiosConfig.httpAgent = proxyAgent
+      axiosConfig.httpsAgent = proxyAgent
+      axiosConfig.proxy = false
+      logger.info(
+        `🌐 Using proxy for Gemini loadCodeAssist: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+      )
+    } catch (error) {
+      logger.error('Failed to create proxy agent for loadCodeAssist:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   } else {
     logger.debug('🌐 No proxy configured for Gemini loadCodeAssist')
   }
@@ -1224,14 +1246,19 @@ async function onboardUser(client, tierId, projectId, clientMetadata, proxyConfi
   }
 
   // 添加代理配置
-  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-  if (proxyAgent) {
-    baseAxiosConfig.httpAgent = proxyAgent
-    baseAxiosConfig.httpsAgent = proxyAgent
-    baseAxiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini onboardUser: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-    )
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      baseAxiosConfig.httpAgent = proxyAgent
+      baseAxiosConfig.httpsAgent = proxyAgent
+      baseAxiosConfig.proxy = false
+      logger.info(
+        `🌐 Using proxy for Gemini onboardUser: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+      )
+    } catch (error) {
+      logger.error('Failed to create proxy agent for onboardUser:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   } else {
     logger.debug('🌐 No proxy configured for Gemini onboardUser')
   }
@@ -1357,14 +1384,19 @@ async function countTokens(client, contents, model = 'gemini-2.0-flash-exp', pro
   }
 
   // 添加代理配置
-  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-  if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
-    axiosConfig.httpsAgent = proxyAgent
-    axiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini countTokens: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-    )
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      axiosConfig.httpAgent = proxyAgent
+      axiosConfig.httpsAgent = proxyAgent
+      axiosConfig.proxy = false
+      logger.info(
+        `🌐 Using proxy for Gemini countTokens: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+      )
+    } catch (error) {
+      logger.error('Failed to create proxy agent for countTokens:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   } else {
     logger.debug('🌐 No proxy configured for Gemini countTokens')
   }
@@ -1434,14 +1466,19 @@ async function generateContent(
   }
 
   // 添加代理配置
-  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-  if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
-    axiosConfig.httpsAgent = proxyAgent
-    axiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini generateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-    )
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      axiosConfig.httpAgent = proxyAgent
+      axiosConfig.httpsAgent = proxyAgent
+      axiosConfig.proxy = false
+      logger.info(
+        `🌐 Using proxy for Gemini generateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+      )
+    } catch (error) {
+      logger.error('Failed to create proxy agent for generateContent:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   } else {
     logger.debug('🌐 No proxy configured for Gemini generateContent')
   }
@@ -1510,14 +1547,19 @@ async function generateContentStream(
   }
 
   // 添加代理配置
-  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-  if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
-    axiosConfig.httpsAgent = proxyAgent
-    axiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini streamGenerateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-    )
+  if (proxyConfig) {
+    try {
+      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+      axiosConfig.httpAgent = proxyAgent
+      axiosConfig.httpsAgent = proxyAgent
+      axiosConfig.proxy = false
+      logger.info(
+        `🌐 Using proxy for Gemini streamGenerateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+      )
+    } catch (error) {
+      logger.error('Failed to create proxy agent for streamGenerateContent:', error)
+      throw new Error(`Proxy configuration error: ${error.message}`)
+    }
   } else {
     logger.debug('🌐 No proxy configured for Gemini streamGenerateContent')
   }

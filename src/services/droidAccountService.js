@@ -434,14 +434,17 @@ class DroidAccountService {
     }
 
     if (proxyConfig) {
-      const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-      if (proxyAgent) {
+      try {
+        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
         requestOptions.httpAgent = proxyAgent
         requestOptions.httpsAgent = proxyAgent
         requestOptions.proxy = false
         logger.info(
           `🌐 使用代理验证 Droid Refresh Token: ${ProxyHelper.getProxyDescription(proxyConfig)}`
         )
+      } catch (proxyError) {
+        logger.error('❌ Droid 代理创建失败:', proxyError)
+        throw new Error(`代理配置错误：${proxyError.message}`)
       }
     }
 
@@ -503,11 +506,14 @@ class DroidAccountService {
     }
 
     if (proxyConfig) {
-      const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
-      if (proxyAgent) {
+      try {
+        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
         requestOptions.httpAgent = proxyAgent
         requestOptions.httpsAgent = proxyAgent
         requestOptions.proxy = false
+      } catch (proxyError) {
+        logger.error('❌ Droid 代理创建失败:', proxyError)
+        throw new Error(`代理配置错误：${proxyError.message}`)
       }
     }
 

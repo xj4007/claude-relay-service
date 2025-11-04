@@ -162,6 +162,14 @@ function sendSSEError(res, error, statusCode = null) {
  * @returns {boolean} - 是否可以重试
  */
 function isStreamRetryableError(error) {
+  // 🔄 代理错误可重试 - 切换到其他账户
+  // 这是修复IP泄露问题后新增的功能：当一个账户的代理失败时，
+  // 系统会自动切换到其他可用账户，而不是直接返回错误
+  if (error.isProxyError === true) {
+    logger.info('🔄 Proxy error detected, will retry with another account')
+    return true
+  }
+
   // 🆕 账户并发限制超限错误 - 应该切换到其他账户重试
   // 这是设计上的可重试错误，粘性会话机制会先等待30秒（STICKY_CONCURRENCY_MAX_WAIT_MS）
   // 如果等待后仍然超限，则应该切换账号
