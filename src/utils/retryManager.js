@@ -16,7 +16,7 @@ class RetryManager {
     this.MAX_RETRIES = 2 // 🎯 优化: 5xx错误最大重试次数从3减少到2 (总共尝试3次)
     this.RETRY_DELAY = 0 // 重试延迟（毫秒），0表示立即重试
     this.SLOW_RESPONSE_TIMEOUT = 180000 // 慢响应超时（180秒）
-    this.RETRYABLE_STATUS_CODES = [500, 502, 503, 504, 520] // 可重试的状态码 (🆕 添加520: Claude官方过载错误)
+    this.RETRYABLE_STATUS_CODES = [500, 502, 503, 504, 520, 522, 525] // 可重试的状态码 (🆕 添加522,525: 网络错误，需要切换账号重试)
   }
 
   /**
