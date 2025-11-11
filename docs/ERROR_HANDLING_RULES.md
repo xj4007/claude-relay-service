@@ -52,6 +52,8 @@
 | **502** | 网关错误 | 3次 | 5分钟 | `markAccountTempError()` |
 | **503** | 服务不可用 | 3次 | 5分钟 | `markAccountTempError()` |
 | **504** | 网关超时 | 3次 | 5分钟 | `markAccountTempError()` |
+| **522** | 网络连接错误 | 3次 | 5分钟 | `markAccountTempError()` |
+| **525** | SSL握手失败 | 3次 | 5分钟 | `markAccountTempError()` |
 
 ### 🚫 特殊处理：客户端参数错误（不可重试）
 
@@ -285,6 +287,7 @@ if (response.status === 200 || response.status === 201) {
 | **粘性等待开关** | true | `config/config.js` → `session.stickyConcurrency.waitEnabled` | 是否在粘性会话上限时先短暂等待 |
 | **粘性等待上限** | 1200 ms | `config/config.js` → `session.stickyConcurrency.maxWaitMs` | 单次粘性守护最长等待时长 |
 | **粘性轮询间隔** | 200 ms | `config/config.js` → `session.stickyConcurrency.pollIntervalMs` | 检查并发是否释放的轮询间隔 |
+| **可重试状态码** | [500,502,503,504,520,522,525] | `retryManager.js:19` | 网络错误重试，支持自动账号切换 |
 
 ### 如何修改配置
 
@@ -329,7 +332,19 @@ export STICKY_CONCURRENCY_MAX_WAIT_MS=800
 export STICKY_CONCURRENCY_POLL_INTERVAL_MS=150
 ```
 
----
+📝 [2025-11-11 16:51:10] ERROR: ❌ [522] Account: 8d663f67 | Type: Official | Error: Connection timeout
+📝 [2025-11-11 16:51:10] WARN: ⚠️ Non-retryable error: 522, stopping retry ❌ WRONG!
+
+📝 [2025-11-11 16:51:11] INFO: 🔄 Attempt 1/3 using account: 8d663f67 (claude-console) ✅ FIXED!
+📝 [2025-11-11 16:51:11] ERROR: ❌ [522] Account: 8d663f67 | Error: Connection timeout
+📝 [2025-11-11 16:51:11] WARN: ⚠️ Attempt 1 failed with 522, excluding account 8d663f67
+
+📝 [2025-11-11 16:51:11] INFO: 🔄 Attempt 2/3 using account: backup-account-01 (claude-console)
+📝 [2025-11-11 16:51:11] ERROR: ❌ [522] Account: backup-account-01 | Error: Connection timeout
+📝 [2025-11-11 16:51:11] WARN: ⚠️ Attempt 2 failed with 522, excluding account backup-account-01
+
+📝 [2025-11-11 16:51:12] INFO: 🔄 Attempt 3/3 using account: another-account-02 (claude-console)
+📝 [2025-11-11 16:51:12] INFO: ✅ Request succeeded on attempt 3 ✅
 
 ## 日志示例
 
@@ -588,6 +603,6 @@ grep "Auto-recovered" logs/claude-relay-*.log
 
 ---
 
-**文档版本**: v1.0
-**最后更新**: 2025-10-08
+**文档版本**: v1.1
+**最后更新**: 2025-11-11
 **适用版本**: claude-relay-service v1.0.0+
