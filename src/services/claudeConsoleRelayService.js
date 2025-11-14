@@ -3,7 +3,6 @@ const { v4: uuidv4 } = require('uuid')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
 const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
-const responseCacheService = require('./responseCacheService')
 const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
@@ -262,30 +261,6 @@ class ClaudeConsoleRelayService {
         model: mappedModel
       }
 
-      // 🎯 检查响应缓存（仅非流式请求）
-      const isStreamRequest = requestBody.stream === true
-      const cacheKey = responseCacheService.generateCacheKey(
-        modifiedRequestBody,
-        mappedModel,
-        apiKeyData.id
-      )
-
-      if (!isStreamRequest && cacheKey) {
-        const cachedResponse = await responseCacheService.getCachedResponse(cacheKey)
-        if (cachedResponse) {
-          // 缓存命中，直接返回
-          logger.info(
-            `🎯 [CACHE-HIT] Returning cached response | Key: ${apiKeyData.name} | Acc: ${account.name}`
-          )
-          return {
-            statusCode: cachedResponse.statusCode,
-            headers: cachedResponse.headers,
-            body: cachedResponse.body,
-            usage: cachedResponse.usage
-          }
-        }
-      }
-
       // 处理统一的客户端标识
       if (account && account.useUnifiedClientId && account.unifiedClientId) {
         this._replaceClientId(modifiedRequestBody, account.unifiedClientId)
@@ -511,30 +486,6 @@ class ClaudeConsoleRelayService {
         logger.warn(
           `⚠️ Client timeout too short! Upstream responded in ${upstreamDuration}ms but client already disconnected`
         )
-
-        // 💾 缓存响应（仅非流式且成功的响应）
-        if (!isStreamRequest && response.status === 200 && cacheKey && response.data) {
-          // 解析usage信息（如果有）
-          let usage = null
-          if (response.data.usage) {
-            usage = response.data.usage
-          }
-
-          responseCacheService
-            .cacheResponse(
-              cacheKey,
-              {
-                statusCode: response.status,
-                headers: response.headers,
-                body: response.data,
-                usage
-              },
-              180 // TTL: 3分钟
-            )
-            .catch((err) => {
-              logger.error(`❌ Failed to cache response: ${err.message}`)
-            })
-        }
       } else {
         // 正常响应
         const responseTimeEmoji =
@@ -659,6 +610,35 @@ class ClaudeConsoleRelayService {
           accountId
         }
       } else if (response.status === 200 || response.status === 201) {
+        // 🔍 检测anyrouter-heibai的伪装成功的上游错误
+        const anyrouterFailure = this._detectAnyrouterUpstreamFailure(
+          account,
+          response.data,
+          response.status
+        )
+        if (anyrouterFailure) {
+          // ❌ 禁用anyrouter-heibai账户
+          logger.error(
+            `🚨 Disabling anyrouter-heibai account ${accountId} due to upstream rate limit error`
+          )
+          await claudeConsoleAccountService.updateAccount(accountId, {
+            isActive: false
+          })
+
+          // 返回503错误，触发重试管理器切换账号
+          const sanitizedError = this._sanitizeErrorMessage(
+            503,
+            '服务暂时不可用，系统正在切换账号，请稍后重试',
+            accountId
+          )
+          return {
+            statusCode: 503,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sanitizedError),
+            accountId
+          }
+        }
+
         // 如果请求成功，检查并移除错误状态
         const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(accountId)
         if (isRateLimited) {
@@ -1212,6 +1192,8 @@ class ClaudeConsoleRelayService {
 
           let buffer = ''
           let finalUsageReported = false
+          let firstChunkChecked = false
+          let anyrouterFailureDetected = false
           const collectedUsageData = {
             model: body.model || account?.defaultModel || null
           }
@@ -1229,6 +1211,50 @@ class ClaudeConsoleRelayService {
               }
 
               const chunkStr = chunk.toString()
+
+              // 🔍 检测anyrouter-heibai错误（仅在第一块数据时检测）
+              if (!firstChunkChecked && !anyrouterFailureDetected) {
+                firstChunkChecked = true
+                const anyrouterFailure = this._detectAnyrouterUpstreamFailure(
+                  account,
+                  chunkStr,
+                  200
+                )
+
+                if (anyrouterFailure) {
+                  anyrouterFailureDetected = true
+                  logger.error(
+                    `🚨 [STREAM] Detected anyrouter-heibai upstream failure, disabling account and aborting stream | Acc: ${account.name}`
+                  )
+
+                  // 禁用账户
+                  claudeConsoleAccountService
+                    .updateAccount(accountId, {
+                      isActive: false
+                    })
+                    .catch((err) => {
+                      logger.error('Failed to disable anyrouter-heibai account:', err)
+                    })
+
+                  // 发送503错误给客户端（触发重试）
+                  this._sendSanitizedStreamError(
+                    responseStream,
+                    503,
+                    '服务暂时不可用，系统正在切换账号，请稍后重试',
+                    accountId
+                  )
+
+                  // 标记为已中止，停止处理后续数据
+                  aborted = true
+                  return
+                }
+              }
+
+              // 如果检测到anyrouter错误，不再处理后续数据
+              if (anyrouterFailureDetected) {
+                return
+              }
+
               buffer += chunkStr
 
               // 处理完整的SSE行
@@ -1640,6 +1666,50 @@ class ClaudeConsoleRelayService {
       body.metadata.user_id = `user_${unifiedClientId}${match[1]}`
       logger.info(`🔄 Replaced client ID with unified ID: ${body.metadata.user_id}`)
     }
+  }
+
+  // 🔍 检测anyrouter-heibai上游故障（HTTP 200但返回错误消息）
+  _detectAnyrouterUpstreamFailure(account, responseBody, statusCode) {
+    // 只在HTTP 200状态下检查
+    if (statusCode !== 200) {
+      return null
+    }
+
+    // 检查账户名称是否包含 "anyrouter-heibai"
+    const accountName = (account?.name || '').toLowerCase()
+    if (!accountName.includes('anyrouter-heibai')) {
+      return null
+    }
+
+    // 提取响应内容为字符串
+    let bodyText = ''
+    if (typeof responseBody === 'string') {
+      bodyText = responseBody
+    } else if (responseBody && typeof responseBody === 'object') {
+      try {
+        bodyText = JSON.stringify(responseBody)
+      } catch (e) {
+        bodyText = String(responseBody)
+      }
+    } else {
+      bodyText = String(responseBody || '')
+    }
+
+    // 🔑 关键词检测：检测 "检测到速率限制"
+    if (bodyText.includes('检测到速率限制')) {
+      logger.warn(
+        `🚨 Detected anyrouter-heibai upstream failure: "检测到速率限制" found for account ${account.name} (${account.id})`
+      )
+      logger.debug(`Error body snippet: ${bodyText.substring(0, 300)}`)
+
+      return {
+        detected: true,
+        reason: 'Anyrouter上游速率限制错误',
+        originalBody: bodyText
+      }
+    }
+
+    return null
   }
 
   // 🔥 统一的5xx错误处理方法（记录错误并检查阈值）
