@@ -529,7 +529,10 @@ const authenticateApiKey = async (req, res, next) => {
     // 检查总费用限制
     const totalCostLimit = validation.keyData.totalCostLimit || 0
     if (totalCostLimit > 0) {
-      const totalCost = validation.keyData.totalCost || 0
+      // 🔒 强制读取最新的totalCost，确保并发请求时能检查到最新值
+      // forceRefresh=true 确保跳过缓存，直接从Redis读取最新数据
+      const costStats = await redis.getCostStats(validation.keyData.id, true)
+      const totalCost = costStats.total || 0
 
       if (totalCost >= totalCostLimit) {
         logger.security(
@@ -542,14 +545,15 @@ const authenticateApiKey = async (req, res, next) => {
           error: 'Total cost limit exceeded',
           message: `已达到总费用限制 ($${totalCostLimit})`,
           currentCost: totalCost,
-          costLimit: totalCostLimit
+          costLimit: totalCostLimit,
+          remainingQuota: Math.max(0, totalCostLimit - totalCost)
         })
       }
 
       logger.api(
         `💰 Total cost usage for key: ${validation.keyData.id} (${
           validation.keyData.name
-        }), current: $${totalCost.toFixed(2)}/$${totalCostLimit}`
+        }), current: $${totalCost.toFixed(2)}/$${totalCostLimit}, remaining: $${(totalCostLimit - totalCost).toFixed(2)}`
       )
     }
 

@@ -69,7 +69,43 @@ export const useApiStatsStore = defineStore('apistats', () => {
       }
     }
 
-    // 单个 Key 模式下直接从 modelStats 计算（确保与模型使用统计显示一致）
+    // 🔒 对于 'total' 模式，优先使用 statsData.usage.total.cost（来自 /api/user-stats 的真实总费用）
+    // 这确保总费用与 Redis 中的 usage:cost:total 一致，避免模型费用汇总导致的不一致
+    if (statsPeriod.value === 'total' && statsData.value?.usage?.total?.cost !== undefined) {
+      // 使用 statsData 中的真实总费用，但其他字段从 modelStats 汇总
+      if (modelStats.value && modelStats.value.length > 0) {
+        const summary = {
+          requests: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreateTokens: 0,
+          cacheReadTokens: 0,
+          allTokens: 0,
+          cost: 0,
+          formattedCost: '$0.000000'
+        }
+
+        modelStats.value.forEach((model) => {
+          summary.requests += model.requests || 0
+          summary.inputTokens += model.inputTokens || 0
+          summary.outputTokens += model.outputTokens || 0
+          summary.cacheCreateTokens += model.cacheCreateTokens || 0
+          summary.cacheReadTokens += model.cacheReadTokens || 0
+          summary.allTokens += model.allTokens || 0
+        })
+
+        // 🔒 使用来自 /api/user-stats 的真实总费用（强制刷新的）
+        summary.cost = statsData.value.usage.total.cost
+        summary.formattedCost =
+          statsData.value.usage.total.formattedCost || formatCost(summary.cost)
+        return summary
+      }
+
+      // 如果没有 modelStats，直接返回 statsData.usage.total
+      return statsData.value.usage.total
+    }
+
+    // 单个 Key 模式下，对于 daily/monthly 从 modelStats 计算
     if (modelStats.value && modelStats.value.length > 0) {
       const summary = {
         requests: 0,

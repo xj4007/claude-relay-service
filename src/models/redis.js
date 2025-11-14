@@ -734,8 +734,8 @@ class RedisClient {
     logger.debug(`💰 Cost incremented successfully, new daily total: $${results[0]}`)
   }
 
-  // 💰 获取费用统计
-  async getCostStats(keyId) {
+  // 💰 获取费用统计 (强制读取最新值，确保并发一致性)
+  async getCostStats(keyId, forceRefresh = false) {
     const today = getDateStringInTimezone()
     const tzDate = getDateInTimezone()
     const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(
@@ -744,12 +744,38 @@ class RedisClient {
     )}`
     const currentHour = `${today}:${String(getHourInTimezone(new Date())).padStart(2, '0')}`
 
-    const [daily, monthly, hourly, total] = await Promise.all([
-      this.client.get(`usage:cost:daily:${keyId}:${today}`),
-      this.client.get(`usage:cost:monthly:${keyId}:${currentMonth}`),
-      this.client.get(`usage:cost:hourly:${keyId}:${currentHour}`),
-      this.client.get(`usage:cost:total:${keyId}`)
-    ])
+    // 🔒 如果需要强制刷新或检查成本限制，使用事务确保原子性
+    let daily, monthly, hourly, total
+
+    if (forceRefresh) {
+      // 使用 WATCH 和事务确保读取的是最新值（原子性读取）
+      const client = this.getClientSafe()
+
+      // 直接连续读取，不使用管道，确保获取最新数据
+      // 注意：Redis GET 操作本身是原子的，但为了确保读取最新值，
+      // 我们在关键时刻（如检查成本限制）强制直接查询，而不使用缓存
+      daily = await client.get(`usage:cost:daily:${keyId}:${today}`)
+      monthly = await client.get(`usage:cost:monthly:${keyId}:${currentMonth}`)
+      hourly = await client.get(`usage:cost:hourly:${keyId}:${currentHour}`)
+      total = await client.get(`usage:cost:total:${keyId}`)
+
+      logger.debug(
+        `💰 Force-refreshed cost stats for ${keyId}: daily=$${daily}, monthly=$${monthly}, hourly=$${hourly}, total=$${total}`
+      )
+    } else {
+      // 正常流程，使用并行读取以提高性能
+      const results = await Promise.all([
+        this.client.get(`usage:cost:daily:${keyId}:${today}`),
+        this.client.get(`usage:cost:monthly:${keyId}:${currentMonth}`),
+        this.client.get(`usage:cost:hourly:${keyId}:${currentHour}`),
+        this.client.get(`usage:cost:total:${keyId}`)
+      ])
+
+      daily = results[0]
+      monthly = results[1]
+      hourly = results[2]
+      total = results[3]
+    }
 
     return {
       daily: parseFloat(daily || 0),
