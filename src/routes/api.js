@@ -283,13 +283,18 @@ async function handleMessagesRequest(req, res) {
                     }
                   }
 
+                  // 🆕 提取会话ID（用于 anyrouter-heibai 账户的会话追踪）
+                  const sessionHelper = require('../utils/sessionHelper')
+                  const sessionId = sessionHelper.extractSessionUUID(req.body)
+
                   apiKeyService
                     .recordUsageWithDetails(
                       req.apiKey.id,
                       usageObject,
                       model,
                       usageAccountId,
-                      'claude'
+                      'claude',
+                      sessionId // 🆕 传递会话ID
                     )
                     .catch((error) => {
                       logger.error('❌ Failed to record stream usage:', error)
@@ -382,13 +387,18 @@ async function handleMessagesRequest(req, res) {
                     }
                   }
 
+                  // 🆕 提取会话ID（用于 anyrouter-heibai 账户的会话追踪）
+                  const sessionHelper = require('../utils/sessionHelper')
+                  const sessionId = sessionHelper.extractSessionUUID(req.body)
+
                   apiKeyService
                     .recordUsageWithDetails(
                       req.apiKey.id,
                       usageObject,
                       model,
                       usageAccountId,
-                      'claude-console'
+                      'claude-console',
+                      sessionId // 🆕 传递会话ID
                     )
                     .catch((error) => {
                       logger.error('❌ Failed to record stream usage:', error)

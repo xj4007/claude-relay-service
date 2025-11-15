@@ -600,7 +600,7 @@
                           <!-- 总费用限制进度条（无每日限制时展示） -->
                           <LimitProgressBar
                             v-else-if="key.totalCostLimit > 0"
-                            :current="key.usage?.total?.cost || 0"
+                            :current="getPeriodCost(key)"
                             label="总费用限制"
                             :limit="key.totalCostLimit"
                             type="total"
@@ -1319,7 +1319,7 @@
                   <!-- 总费用限制（无每日限制时展示） -->
                   <LimitProgressBar
                     v-else-if="key.totalCostLimit > 0"
-                    :current="key.usage?.total?.cost || 0"
+                    :current="getPeriodCost(key)"
                     label="总费用限制"
                     :limit="key.totalCostLimit"
                     type="total"

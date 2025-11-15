@@ -178,6 +178,44 @@ class SessionHelper {
       /^[a-f0-9]{32}$/.test(sessionHash)
     )
   }
+
+  /**
+   * 🆕 从请求体的 metadata.user_id 中提取会话UUID
+   * Claude Code 会在请求中包含 user_id，格式为：user_{client_id}_account__session_{uuid}
+   *
+   * @param {Object} requestBody - 请求体对象
+   * @returns {string|null} - 会话UUID，如果提取失败返回null
+   */
+  extractSessionUUID(requestBody) {
+    try {
+      // 检查是否有 metadata.user_id
+      if (
+        !requestBody ||
+        !requestBody.metadata ||
+        typeof requestBody.metadata.user_id !== 'string'
+      ) {
+        return null
+      }
+
+      const userId = requestBody.metadata.user_id
+
+      // 尝试匹配格式：user_{64位十六进制}_account__session_{uuid}
+      const match = userId.match(/_account__session_([a-f0-9-]{36})$/)
+
+      if (match && match[1]) {
+        const sessionUUID = match[1]
+        logger.debug(`✅ Extracted session UUID: ${sessionUUID} from user_id: ${userId}`)
+        return sessionUUID
+      }
+
+      // 没有匹配到会话UUID
+      logger.debug(`⚠️ No session UUID found in user_id: ${userId}`)
+      return null
+    } catch (error) {
+      logger.warn(`❌ Failed to extract session UUID: ${error.message}`)
+      return null
+    }
+  }
 }
 
 module.exports = new SessionHelper()

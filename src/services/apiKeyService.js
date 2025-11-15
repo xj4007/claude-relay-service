@@ -360,35 +360,16 @@ class ApiKeyService {
         return { valid: false, error: 'API key not found' }
       }
 
-      // 检查是否激活
-      if (keyData.isActive !== 'true') {
-        return { valid: false, error: 'API key is disabled' }
-      }
+      // ⚠️ 注意：统计查询允许查询已禁用的 API Key，因此不检查 isActive 状态
+      // 这样用户可以查看已禁用 Key 的历史使用数据
 
       // 注意：这里不处理激活逻辑，保持 API Key 的未激活状态
 
-      // 检查是否过期（仅对已激活的 Key 检查）
-      if (
-        keyData.isActivated === 'true' &&
-        keyData.expiresAt &&
-        new Date() > new Date(keyData.expiresAt)
-      ) {
-        return { valid: false, error: 'API key has expired' }
-      }
+      // ⚠️ 注意：统计查询也允许查询已过期的 API Key，因此不检查过期状态
+      // 这样用户可以查看已过期 Key 的历史使用数据
 
-      // 如果API Key属于某个用户，检查用户是否被禁用
-      if (keyData.userId) {
-        try {
-          const userService = require('./userService')
-          const user = await userService.getUserById(keyData.userId, false)
-          if (!user || !user.isActive) {
-            return { valid: false, error: 'User account is disabled' }
-          }
-        } catch (userError) {
-          // 如果用户服务出错，记录但不影响API Key验证
-          logger.warn(`Failed to check user status for API key ${keyData.id}:`, userError)
-        }
-      }
+      // ⚠️ 注意：即使API Key属于被禁用的用户，也允许查询统计数据
+      // 这样用户可以查看历史使用记录
 
       // 获取当日费用（使用最新数据）
       const [dailyCost, costStats] = await Promise.all([
@@ -1140,7 +1121,8 @@ class ApiKeyService {
     usageObject,
     model = 'unknown',
     accountId = null,
-    accountType = null
+    accountType = null,
+    sessionId = null // 🆕 新增参数：会话ID，用于追踪新会话的第一次请求
   ) {
     try {
       // 提取 token 数量
@@ -1151,7 +1133,14 @@ class ApiKeyService {
 
       // 🎯 anyrouter账户特殊计费优化
       let isAnyRouterAccount = false // 标记是否为anyrouter账户，用于后续费用折扣
-      let anyrouterDiscountRatio = 0.3 // 用户支付30%折扣
+
+      //  设置值	用户实际支付	折扣力度	效果
+      //  0.2	20% 费用	80% 折扣	扣费少 ⬇️
+      //  0.3	30% 费用	70% 折扣	当前设置
+      //  0.4	40% 费用	60% 折扣	扣费多 ⬆️
+      //  0.5	50% 费用	50% 折扣	半价
+      //  1.0	100% 费用	无折扣	原价
+      let anyrouterDiscountRatio = 0.5 // 用户支付50%折扣
 
       // 检查是否为anyrouter账户
       if (accountId && cacheReadTokens > 0) {
@@ -1170,21 +1159,67 @@ class ApiKeyService {
           const isAnyrouterAnyrouterAccount = account?.name?.includes('anyrouter-anyrouter')
 
           // 🎯 步骤1：anyrouter-heibai 账户特殊处理（没有真实缓存）
-          if (isHeibaiAccount && cacheCreateTokens === 0 && cacheReadTokens > 0) {
+          if (
+            isHeibaiAccount &&
+            (cacheReadTokens > 0 || (cacheCreateTokens > 0 && cacheReadTokens > 0))
+          ) {
             isAnyRouterAccount = true // 标记为anyrouter账户
-            anyrouterDiscountRatio = 0.3 // heibai账户保留30%费用（70%折扣），多扣费
+            anyrouterDiscountRatio = 0.3 // heibai账户保留40%费用（60%折扣），多扣费
 
             // 🎯 优化策略：增加input_tokens显示，减少cache_read，生成合理的cache_create
             // 目标：用户支付原价的30%费用（70%折扣）
 
-            const totalInputTokens = inputTokens + cacheReadTokens // 原始总输入
+            // 🆕 会话追踪：判断是否为新会话的第一次请求
+            let isFirstRequestInSession = false
+            if (sessionId) {
+              const client = redis.getClientSafe()
+              const sessionKey = `anyrouter_session:${accountId}:${sessionId}`
+              const sessionExists = await client.exists(sessionKey)
+
+              if (!sessionExists) {
+                // 新会话，标记为第一次请求
+                isFirstRequestInSession = true
+                // 记录会话，24小时过期
+                await client.setex(sessionKey, 24 * 60 * 60, Date.now().toString())
+                logger.info(
+                  `🆕 [anyrouter-heibai新会话] 账户"${account.name}"检测到新会话: ${sessionId}`
+                )
+              }
+            }
+
+            // 🔍 智能处理异常情况：同时有 cache_creation 和 cache_read
+            let totalInputTokens = inputTokens
+            if (cacheCreateTokens > 0 && cacheReadTokens > 0) {
+              // ⚠️ 异常情况：第一次请求不应该同时有创建和读取
+              // 将 cache_read 转换为 input_tokens，只保留 cache_creation
+              logger.warn(
+                `⚠️ [anyrouter-heibai异常修正] 账户"${account.name}"首次请求异常：同时存在cache_creation(${cacheCreateTokens})和cache_read(${cacheReadTokens})，将cache_read归入input计算`
+              )
+              totalInputTokens = inputTokens + cacheReadTokens // 将异常的cache_read加入总输入
+              cacheReadTokens = 0 // 重置cache_read为0（首次请求不应该有缓存读取）
+            } else if (cacheReadTokens > 0) {
+              // 正常情况：只有 cache_read，没有 cache_creation
+              totalInputTokens = inputTokens + cacheReadTokens
+            }
 
             // 🎲 分配策略（随机变化以显示真实性）：
-            // - input_tokens: 25-35% 的总输入（确保有合理的显示值，最小500）
-            // - cache_create: 8-12% 的总输入
-            // - cache_read: 剩余部分
-            const inputRatio = Math.random() * 0.1 + 0.25 // 25-35%
-            const cacheCreateRatio = Math.random() * 0.04 + 0.08 // 8-12%
+            let inputRatio, cacheCreateRatio
+
+            if (isFirstRequestInSession) {
+              // 🆕 新会话第一次请求：cache_creation应该占主要比例，cache_read为0
+              inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
+              cacheCreateRatio = Math.random() * 0.1 + 0.6 // 60-70% cache_creation（主要部分）
+              logger.info(
+                `🆕 [anyrouter-heibai新会话首次] 使用首次请求策略: input=${Math.round(inputRatio * 100)}%, cache_create=${Math.round(cacheCreateRatio * 100)}%, cache_read=0%`
+              )
+            } else {
+              // 📚 后续请求：cache_read应该占主要比例，cache_creation为0或很小
+              inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
+              cacheCreateRatio = Math.random() * 0.03 // 0-3% cache_creation（很小或为0）
+              logger.info(
+                `📚 [anyrouter-heibai后续请求] 使用后续请求策略: input=${Math.round(inputRatio * 100)}%, cache_create=${Math.round(cacheCreateRatio * 100)}%, cache_read=主要部分`
+              )
+            }
 
             const calculatedInputTokens = Math.floor(totalInputTokens * inputRatio)
             const minInputTokens = 500 // 最小输入 tokens，确保显示合理
@@ -1203,7 +1238,7 @@ class ApiKeyService {
             cacheReadTokens = newCacheReadTokens
 
             logger.info(
-              `💰 [anyrouter-heibai特殊计费] 账户"${account.name}"优化token分配: input=${newInputTokens}(${Math.round(inputRatio * 100)}%, 最小${minInputTokens}), cache_create=${newCacheCreateTokens}(${Math.round(cacheCreateRatio * 100)}%), cache_read=${newCacheReadTokens}, 用户支付30%费用（70%折扣）`
+              `💰 [anyrouter-heibai特殊计费] 账户"${account.name}"${isFirstRequestInSession ? '【新会话】' : '【后续请求】'}优化token分配: input=${newInputTokens}(${Math.round(inputRatio * 100)}%), cache_create=${newCacheCreateTokens}(${Math.round(cacheCreateRatio * 100)}%), cache_read=${newCacheReadTokens}, 用户支付30%费用（70%折扣）`
             )
 
             // 更新usageObject

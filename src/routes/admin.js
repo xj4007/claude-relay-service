@@ -332,72 +332,11 @@ router.get('/api-keys', authenticateAdmin, async (req, res) => {
       const client = redis.getClientSafe()
 
       if (timeRange === 'all') {
-        // 全部时间：保持原有逻辑
+        // 全部时间：直接使用已存储的totalCost，保持与费用列显示一致
         if (apiKey.usage && apiKey.usage.total) {
-          // 使用与展开模型统计相同的数据源
-          // 获取所有时间的模型统计数据
-          const monthlyKeys = await client.keys(`usage:${apiKey.id}:model:monthly:*:*`)
-          const modelStatsMap = new Map()
-
-          // 汇总所有月份的数据
-          for (const key of monthlyKeys) {
-            const match = key.match(/usage:.+:model:monthly:(.+):\d{4}-\d{2}$/)
-            if (!match) {
-              continue
-            }
-
-            const model = match[1]
-            const data = await client.hgetall(key)
-
-            if (data && Object.keys(data).length > 0) {
-              if (!modelStatsMap.has(model)) {
-                modelStatsMap.set(model, {
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cacheCreateTokens: 0,
-                  cacheReadTokens: 0
-                })
-              }
-
-              const stats = modelStatsMap.get(model)
-              stats.inputTokens +=
-                parseInt(data.totalInputTokens) || parseInt(data.inputTokens) || 0
-              stats.outputTokens +=
-                parseInt(data.totalOutputTokens) || parseInt(data.outputTokens) || 0
-              stats.cacheCreateTokens +=
-                parseInt(data.totalCacheCreateTokens) || parseInt(data.cacheCreateTokens) || 0
-              stats.cacheReadTokens +=
-                parseInt(data.totalCacheReadTokens) || parseInt(data.cacheReadTokens) || 0
-            }
-          }
-
-          let totalCost = 0
-
-          // 计算每个模型的费用
-          for (const [model, stats] of modelStatsMap) {
-            const usage = {
-              input_tokens: stats.inputTokens,
-              output_tokens: stats.outputTokens,
-              cache_creation_input_tokens: stats.cacheCreateTokens,
-              cache_read_input_tokens: stats.cacheReadTokens
-            }
-
-            const costResult = CostCalculator.calculateCost(usage, model)
-            totalCost += costResult.costs.total
-          }
-
-          // 如果没有详细的模型数据，使用总量数据和默认模型计算
-          if (modelStatsMap.size === 0) {
-            const usage = {
-              input_tokens: apiKey.usage.total.inputTokens || 0,
-              output_tokens: apiKey.usage.total.outputTokens || 0,
-              cache_creation_input_tokens: apiKey.usage.total.cacheCreateTokens || 0,
-              cache_read_input_tokens: apiKey.usage.total.cacheReadTokens || 0
-            }
-
-            const costResult = CostCalculator.calculateCost(usage, 'claude-3-5-haiku-20241022')
-            totalCost = costResult.costs.total
-          }
+          // 使用Redis中已经累计的totalCost值，而不是重新计算
+          // 这样可以确保费用列和限制进度条显示的数据一致
+          const totalCost = apiKey.totalCost || 0
 
           // 添加格式化的费用到响应数据
           apiKey.usage.total.cost = totalCost

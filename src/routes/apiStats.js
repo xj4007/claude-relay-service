@@ -93,21 +93,8 @@ router.post('/api/user-stats', async (req, res) => {
         })
       }
 
-      // 检查是否激活
-      if (keyData.isActive !== 'true') {
-        return res.status(403).json({
-          error: 'API key is disabled',
-          message: 'This API key has been disabled'
-        })
-      }
-
-      // 检查是否过期
-      if (keyData.expiresAt && new Date() > new Date(keyData.expiresAt)) {
-        return res.status(403).json({
-          error: 'API key has expired',
-          message: 'This API key has expired'
-        })
-      }
+      // ⚠️ 注意：统计查询允许查询已禁用和已过期的 API Key
+      // 这样用户可以查看历史使用数据
 
       keyId = apiId
 
@@ -755,13 +742,8 @@ router.post('/api/user-model-stats', async (req, res) => {
         })
       }
 
-      // 检查是否激活
-      if (keyData.isActive !== 'true') {
-        return res.status(403).json({
-          error: 'API key is disabled',
-          message: 'This API key has been disabled'
-        })
-      }
+      // ⚠️ 注意：统计查询允许查询已禁用的 API Key
+      // 这样用户可以查看历史使用数据
 
       keyId = apiId
 
@@ -770,8 +752,8 @@ router.post('/api/user-model-stats', async (req, res) => {
       keyData.usage = { total: usage.total }
     } else if (apiKey) {
       // 通过 apiKey 查询（保持向后兼容）
-      // 验证API Key
-      const validation = await apiKeyService.validateApiKey(apiKey)
+      // 验证API Key（使用不触发激活的验证方法）
+      const validation = await apiKeyService.validateApiKeyForStats(apiKey)
 
       if (!validation.valid) {
         const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
@@ -915,7 +897,7 @@ router.post('/api/transaction-logs', async (req, res) => {
       })
     }
 
-    // 验证 API Key 是否存在且激活
+    // 验证 API Key 是否存在
     const keyData = await redis.getApiKey(apiId)
     if (!keyData || Object.keys(keyData).length === 0) {
       logger.security(`🔒 API key not found for ID: ${apiId} from ${req.ip || 'unknown'}`)
@@ -925,12 +907,8 @@ router.post('/api/transaction-logs', async (req, res) => {
       })
     }
 
-    if (keyData.isActive !== 'true') {
-      return res.status(403).json({
-        error: 'API key is disabled',
-        message: 'This API key has been disabled'
-      })
-    }
+    // ⚠️ 注意：统计查询允许查询已禁用的 API Key
+    // 这样用户可以查看历史使用数据
 
     // 验证时间范围（可选）
     let start = null
