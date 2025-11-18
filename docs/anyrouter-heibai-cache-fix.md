@@ -1,221 +1,154 @@
-# anyrouter-heibai 账户基于会话的智能缓存分配
+# anyrouter-heibai 账户简化计费策略
 
-## 问题描述
+## 概述
 
-anyrouter-heibai 账户存在两个缓存相关的问题：
+anyrouter-heibai 账户采用简化的计费策略，不再进行 token 重新分配和会话追踪，直接使用上游返回的原始数据，并应用特殊的费用折扣。
 
-### 问题1：第一次请求异常数据
+## 核心策略
 
-anyrouter-heibai 账户在第一次请求时，返回的 usage 数据同时包含 `cache_creation_input_tokens` 和 `cache_read_input_tokens`，这是不符合逻辑的。
+### 1. 保持原始 Token 数值
 
-**正确的缓存逻辑：**
-- 第一次请求：只有 `cache_creation_input_tokens`（创建缓存），没有 `cache_read_input_tokens`（缓存读取）
-- 后续请求：可能有 `cache_read_input_tokens`（命中缓存），一般没有 `cache_creation_input_tokens`
+anyrouter-heibai 账户不再修改上游返回的 token 数值，直接使用：
 
-**异常数据示例：**
+- `input_tokens` - 原始输入 tokens
+- `cache_creation_input_tokens` - 原始缓存创建 tokens
+- `cache_read_input_tokens` - 原始缓存读取 tokens
+- `output_tokens` - 原始输出 tokens
 
-```
-时间: 2025-11-14 14:29:30
-模型: claude-haiku-4-5-20251001
-输入 Tokens: 28,524
-输出 Tokens: 225
-缓存创建: 10,193  ⚠️ 不应该同时存在
-缓存读取: 72,632  ⚠️ 不应该同时存在
-```
+### 2. 30% 费用折扣（70% 折扣）
 
-### 问题2：新会话缓存分配不合理
-
-用户新开会话时，anyrouter-heibai 账户可能会一直返回 `cache_read`，导致看起来所有请求都在读取缓存，而没有新的缓存创建记录。
-
-**期望行为：**
-- 新会话的第一次请求：应该主要是 `cache_creation`（创建新缓存）
-- 同一会话的后续请求：应该主要是 `cache_read`（命中缓存）
-
-## 根本原因
-
-1. **数据异常**：anyrouter-heibai 上游服务返回的数据存在问题，第一次请求时不应该同时返回创建和读取两个字段
-2. **缺少会话追踪**：旧版本没有区分新会话和旧会话，无法判断请求是否为新会话的第一次请求
-
-## 解决方案
-
-### 核心改进
-
-1. **会话ID提取**：从请求的 `metadata.user_id` 中提取会话UUID
-2. **会话追踪**：使用Redis记录每个会话的首次请求时间，24小时过期
-3. **智能分配策略**：
-   - 新会话首次请求：60-70% cache_creation，25-35% input，0-5% cache_read
-   - 后续请求：0-3% cache_creation，25-35% input，60-70% cache_read
-
-### 修改的文件
-
-1. **[src/services/apiKeyService.js](../src/services/apiKeyService.js:1138-1260)** - 添加会话追踪逻辑
-2. **[src/utils/sessionHelper.js](../src/utils/sessionHelper.js:182-219)** - 新增 `extractSessionUUID()` 方法
-3. **[src/routes/api.js](../src/routes/api.js)** - 路由调用时传递会话ID
-
-### 详细代码变更
-
-#### 1. 扩展 `recordUsageWithDetails` 方法签名
-
-**修改位置**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1138-1145)
-
-**原签名：**
-```javascript
-async recordUsageWithDetails(
-  keyId,
-  usageObject,
-  model = 'unknown',
-  accountId = null,
-  accountType = null
-) {
-```
-
-**新签名：**
-```javascript
-async recordUsageWithDetails(
-  keyId,
-  usageObject,
-  model = 'unknown',
-  accountId = null,
-  accountType = null,
-  sessionId = null // 🆕 新增参数：会话ID
-) {
-```
-
-#### 2. 新增会话追踪逻辑
-
-**修改位置**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1184-1234)
+anyrouter-heibai 账户的用户只需支付 **30%** 的费用（享受 **70% 折扣**）：
 
 ```javascript
-// 🆕 会话追踪：判断是否为新会话的第一次请求
-let isFirstRequestInSession = false
-if (sessionId) {
-  const client = redis.getClientSafe()
-  const sessionKey = `anyrouter_session:${accountId}:${sessionId}`
-  const sessionExists = await client.exists(sessionKey)
-
-  if (!sessionExists) {
-    // 新会话，标记为第一次请求
-    isFirstRequestInSession = true
-    // 记录会话，24小时过期
-    await client.setex(sessionKey, 24 * 60 * 60, Date.now().toString())
-    logger.info(
-      `🆕 [anyrouter-heibai新会话] 账户"${account.name}"检测到新会话: ${sessionId}`
-    )
-  }
-}
-
-// 🎲 分配策略（随机变化以显示真实性）：
-let inputRatio, cacheCreateRatio
-
-if (isFirstRequestInSession) {
-  // 🆕 新会话第一次请求：cache_creation应该占主要比例，cache_read为0
-  inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
-  cacheCreateRatio = Math.random() * 0.1 + 0.60 // 60-70% cache_creation（主要部分）
-} else {
-  // 📚 后续请求：cache_read应该占主要比例，cache_creation为0或很小
-  inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
-  cacheCreateRatio = Math.random() * 0.03 // 0-3% cache_creation（很小或为0）
-}
+anyrouterDiscountRatio = 0.3 // 用户支付 30% 费用
 ```
 
-#### 3. 新增 `extractSessionUUID()` 辅助函数
+费用折扣应用到所有成本组成部分：
 
-**修改位置**：[src/utils/sessionHelper.js](../src/utils/sessionHelper.js:182-219)
+- `totalCost` - 总成本
+- `ephemeral5mCost` - 5分钟临时缓存成本
+- `ephemeral1hCost` - 1小时临时缓存成本
 
-```javascript
-extractSessionUUID(requestBody) {
-  try {
-    // 检查是否有 metadata.user_id
-    if (
-      !requestBody ||
-      !requestBody.metadata ||
-      typeof requestBody.metadata.user_id !== 'string'
-    ) {
-      return null
-    }
+### 3. 模型名称后缀标识
 
-    const userId = requestBody.metadata.user_id
+在交易日志中，anyrouter-heibai 账户的请求会在模型名称后添加 `2api` 后缀，便于识别：
 
-    // 尝试匹配格式：user_{64位十六进制}_account__session_{uuid}
-    const match = userId.match(/_account__session_([a-f0-9-]{36})$/)
+**示例**：
 
-    if (match && match[1]) {
-      const sessionUUID = match[1]
-      logger.debug(`✅ Extracted session UUID: ${sessionUUID}`)
-      return sessionUUID
-    }
+- 原始模型：`claude-haiku-4-5-20251001`
+- 日志显示：`claude-haiku-4-5-20251001-2api`
 
-    return null
-  } catch (error) {
-    logger.warn(`❌ Failed to extract session UUID: ${error.message}`)
-    return null
-  }
-}
-```
+## 修改的文件
 
-#### 4. 路由调用传递会话ID
+1. **[src/services/apiKeyService.js](../src/services/apiKeyService.js:1161-1169)** - 简化的 heibai 账户处理逻辑
+2. **[src/services/apiKeyService.js](../src/services/apiKeyService.js:1270)** - 费用折扣注释更新
+3. **[src/services/apiKeyService.js](../src/services/apiKeyService.js:1046-1068)** - 交易日志模型名称后缀
+4. **[src/services/apiKeyService.js](../src/services/apiKeyService.js:1418-1429)** - 交易日志模型名称后缀
 
-**修改位置**：[src/routes/api.js](../src/routes/api.js:286-298)
+## 详细代码变更
+
+### 1. 简化的 heibai 账户识别和折扣设置
+
+**修改位置**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1161-1169)
 
 ```javascript
-// 🆕 提取会话ID（用于 anyrouter-heibai 账户的会话追踪）
-const sessionHelper = require('../utils/sessionHelper')
-const sessionId = sessionHelper.extractSessionUUID(req.body)
+// 🎯 步骤1：anyrouter-heibai 账户特殊处理（保持原始token数值，应用30%费用折扣）
+if (isHeibaiAccount) {
+  isAnyRouterAccount = true // 标记为anyrouter账户
+  anyrouterDiscountRatio = 0.3 // heibai账户按30%计费（70%折扣）
 
-apiKeyService
-  .recordUsageWithDetails(
-    req.apiKey.id,
-    usageObject,
-    model,
-    usageAccountId,
-    'claude-console',
-    sessionId // 🆕 传递会话ID
+  logger.info(
+    `💰 [anyrouter-heibai特殊计费] 账户"${account.name}"保持原始token数值: input=${inputTokens}, cache_create=${cacheCreateTokens}, cache_read=${cacheReadTokens}, 用户支付30%费用（70%折扣）`
   )
+}
+```
+
+### 2. 费用折扣应用
+
+**修改位置**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1267-1282)
+
+```javascript
+// 💸 anyrouter账户特殊折扣：在Token转换优化后应用费用折扣
+if (isAnyRouterAccount && costInfo.totalCost > 0) {
+  const originalCost = costInfo.totalCost
+  // 使用账户特定的折扣率（heibai: 30%, anyrouter: 50%）
+  const discountRatio = anyrouterDiscountRatio
+
+  // 应用折扣到所有费用组成部分
+  costInfo.totalCost = costInfo.totalCost * discountRatio
+  costInfo.ephemeral5mCost = (costInfo.ephemeral5mCost || 0) * discountRatio
+  costInfo.ephemeral1hCost = (costInfo.ephemeral1hCost || 0) * discountRatio
+
+  const discountPercent = Math.round((1 - discountRatio) * 100)
+  logger.info(
+    `💸 [anyrouter优化计费-步骤2] 应用${discountPercent}%费用折扣(保留${Math.round(discountRatio * 100)}%): $${originalCost.toFixed(6)} → $${costInfo.totalCost.toFixed(6)} (节省 $${(originalCost - costInfo.totalCost).toFixed(6)})`
+  )
+}
+```
+
+### 3. 交易日志模型名称后缀
+
+**修改位置1**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1046-1068)
+
+```javascript
+// 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
+try {
+  // 🎯 为 heibai 账户添加 2api 后缀标识
+  const logModel = isHeibaiAccount ? `${model}2api` : model
+
+  const transactionLogData = {
+    model: logModel,
+    inputTokens,
+    outputTokens,
+    cacheCreateTokens,
+    cacheReadTokens,
+    cost: costInfo.costs.total || 0,
+    remainingQuota: remainingQuotaAfterCharge
+  }
+  // ...
+}
+```
+
+**修改位置2**：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1418-1429)
+
+```javascript
+// 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
+try {
+  // 🎯 为 heibai 账户添加 2api 后缀标识
+  const logModel = isHeibaiAccount ? `${model}2api` : model
+
+  await redis.addTransactionLog(keyId, {
+    model: logModel,
+    inputTokens,
+    outputTokens,
+    cacheCreateTokens,
+    cacheReadTokens,
+    cost: costInfo.totalCost || 0,
+    remainingQuota: remainingQuotaAfterCharge
+  })
+}
 ```
 
 ## 工作流程
 
-### 新会话的第一次请求
-
 ```mermaid
 sequenceDiagram
-    participant Client as 客户端（新会话）
+    participant Client as 客户端
     participant Router as API路由
-    participant SessionHelper as SessionHelper
     participant ApiKeyService as apiKeyService
+    participant Upstream as anyrouter-heibai上游
     participant Redis as Redis
 
-    Client->>Router: POST /v1/messages (metadata.user_id含session_xxx)
-    Router->>SessionHelper: extractSessionUUID(req.body)
-    SessionHelper-->>Router: sessionUUID = "abc-123-def"
-    Router->>ApiKeyService: recordUsageWithDetails(..., sessionUUID)
-    ApiKeyService->>Redis: EXISTS anyrouter_session:accountId:abc-123-def
-    Redis-->>ApiKeyService: 0 (不存在)
-    ApiKeyService->>Redis: SETEX anyrouter_session:accountId:abc-123-def 86400 timestamp
-    ApiKeyService->>ApiKeyService: isFirstRequestInSession = true
-    ApiKeyService->>ApiKeyService: 分配策略：60-70% cache_creation, 25-35% input, 0-5% cache_read
-    ApiKeyService-->>Client: 缓存token已优化分配
-```
-
-### 同一会话的后续请求
-
-```mermaid
-sequenceDiagram
-    participant Client as 客户端（同一会话）
-    participant Router as API路由
-    participant SessionHelper as SessionHelper
-    participant ApiKeyService as apiKeyService
-    participant Redis as Redis
-
-    Client->>Router: POST /v1/messages (同一session_xxx)
-    Router->>SessionHelper: extractSessionUUID(req.body)
-    SessionHelper-->>Router: sessionUUID = "abc-123-def"
-    Router->>ApiKeyService: recordUsageWithDetails(..., sessionUUID)
-    ApiKeyService->>Redis: EXISTS anyrouter_session:accountId:abc-123-def
-    Redis-->>ApiKeyService: 1 (存在)
-    ApiKeyService->>ApiKeyService: isFirstRequestInSession = false
-    ApiKeyService->>ApiKeyService: 分配策略：0-3% cache_creation, 25-35% input, 60-70% cache_read
-    ApiKeyService-->>Client: 缓存token已优化分配（主要是cache_read）
+    Client->>Router: POST /v1/messages
+    Router->>Upstream: 转发请求
+    Upstream-->>Router: 返回响应（含usage数据）
+    Router->>ApiKeyService: recordUsageWithDetails(keyId, usage, model, accountId)
+    ApiKeyService->>ApiKeyService: 识别为heibai账户
+    ApiKeyService->>ApiKeyService: 保持原始token数值（不修改）
+    ApiKeyService->>ApiKeyService: 计算成本
+    ApiKeyService->>ApiKeyService: 应用10%费用折扣
+    ApiKeyService->>Redis: 记录交易日志（模型名称+2api）
+    ApiKeyService-->>Client: 返回响应
 ```
 
 ## 测试方法
@@ -234,88 +167,124 @@ node scripts/test-anyrouter-heibai.js
 
 修改后的代码会输出以下日志：
 
-**新会话首次请求：**
 ```
-🆕 [anyrouter-heibai新会话] 账户"anyrouter-heibai-xxx"检测到新会话: abc-123-def
+💰 [anyrouter-heibai特殊计费] 账户"anyrouter-heibai-xxx"保持原始token数值:
+   input=28524, cache_create=10193, cache_read=72632, 用户支付30%费用（70%折扣）
 
-🆕 [anyrouter-heibai新会话首次] 使用首次请求策略: input=30%, cache_create=65%, cache_read=0%
-
-💰 [anyrouter-heibai特殊计费] 账户"anyrouter-heibai-xxx"【新会话】优化token分配:
-   input=1000(30%), cache_create=21000(65%), cache_read=0, 用户支付30%费用（70%折扣）
-```
-
-**同一会话后续请求：**
-```
-📚 [anyrouter-heibai后续请求] 使用后续请求策略: input=28%, cache_create=2%, cache_read=主要部分
-
-💰 [anyrouter-heibai特殊计费] 账户"anyrouter-heibai-xxx"【后续请求】优化token分配:
-   input=900(28%), cache_create=500(2%), cache_read=22600, 用户支付30%费用（70%折扣）
+💸 [anyrouter优化计费-步骤2] 应用70%费用折扣(保留30%):
+   $0.5000 → $0.1500 (节省 $0.3500)
 ```
 
 ### 3. 检查交易日志
 
 修正后，交易日志中应该显示：
 
-**场景1：新用户开始对话**
+| 时间     | 模型       | 输入   | 输出 | 缓存创建 | 缓存读取 | 费用    | 说明                     |
+| -------- | ---------- | ------ | ---- | -------- | -------- | ------- | ------------------------ |
+| 14:00:00 | haiku-2api | 28,524 | 225  | 10,193   | 72,632   | $0.1500 | 保持原始数据，30%计费 ✅ |
+| 14:00:30 | haiku-2api | 15,200 | 180  | 5,800    | 42,000   | $0.0960 | 保持原始数据，30%计费 ✅ |
 
-| 时间 | 模型 | 输入 | 输出 | 缓存创建 | 缓存读取 | 说明 |
-|------|------|------|------|---------|---------|------|
-| 14:00:00 | haiku | 1,000 | 150 | 21,000 ✅ | 0 ✅ | 新会话首次，创建缓存 |
-| 14:00:30 | haiku | 900 | 200 | 500 | 22,600 ✅ | 后续请求，主要读取 |
-| 14:01:00 | haiku | 850 | 180 | 0 | 23,150 ✅ | 后续请求，主要读取 |
+## 数据示例
 
-**场景2：新会话（不同用户或/clear后）**
+### 上游返回的原始数据
 
-| 时间 | 模型 | 输入 | 输出 | 缓存创建 | 缓存读取 | 说明 |
-|------|------|------|------|---------|---------|------|
-| 14:30:00 | haiku | 1,200 | 100 | 18,000 ✅ | 0 ✅ | 新会话首次，创建缓存 |
-| 14:30:20 | haiku | 1,100 | 150 | 600 | 19,300 ✅ | 后续请求，主要读取 |
-
-## 预期效果
-
-修改后，anyrouter-heibai 账户的缓存 token 分配应该符合逻辑：
-
-| 请求类型 | input_tokens | cache_creation | cache_read | 说明 |
-|---------|-------------|----------------|------------|------|
-| 新会话首次请求 | 25-35% | **60-70%** ✅ | 0-5% ✅ | 创建缓存，主要是创建 |
-| 同一会话后续请求 | 25-35% | 0-3% ✅ | **60-70%** ✅ | 命中缓存，主要是读取 |
-
-## Redis 数据结构
-
-会话追踪使用以下Redis键：
-
-```
-anyrouter_session:{accountId}:{sessionUUID}
+```json
+{
+  "usage": {
+    "input_tokens": 28524,
+    "output_tokens": 225,
+    "cache_creation_input_tokens": 10193,
+    "cache_read_input_tokens": 72632
+  }
+}
 ```
 
-- **值**：首次请求时间戳
-- **过期时间**：24小时（86400秒）
-- **用途**：判断是否为新会话的第一次请求
+### 系统处理后
 
-示例：
-```redis
-SET anyrouter_session:acc123:abc-def-ghi-456 "1700000000000"
-EXPIRE anyrouter_session:acc123:abc-def-ghi-456 86400
-```
+**Token 数值**：完全保持不变
+
+- input_tokens: `28524` （无修改）
+- cache_creation_input_tokens: `10193` （无修改）
+- cache_read_input_tokens: `72632` （无修改）
+- output_tokens: `225` （无修改）
+
+**费用计算**：
+
+- 原始成本：`$0.5000`
+- 折扣后成本：`$0.1500`（30% 计费）
+- 节省：`$0.3500`（70% 折扣）
+
+**交易日志**：
+
+- 模型名称：`claude-haiku-4-5-20251001-2api`（添加后缀）
+- 其他字段：保持原始数值
 
 ## 相关文件
 
-- 主要修改：[src/services/apiKeyService.js](../src/services/apiKeyService.js:1138-1260)
-- 辅助函数：[src/utils/sessionHelper.js](../src/utils/sessionHelper.js:182-219)
-- 路由集成：[src/routes/api.js](../src/routes/api.js)
+- 主要修改：[src/services/apiKeyService.js](../src/services/apiKeyService.js)
 - 测试脚本：[scripts/test-anyrouter-heibai.js](../scripts/test-anyrouter-heibai.js)
-- 智能缓存优化：[src/services/smartCacheOptimizer.js](../src/services/smartCacheOptimizer.js)
 
 ## 注意事项
 
-1. **只影响 anyrouter-heibai 账户**：此修正仅对账户名包含 `anyrouter-heibai` 的账户生效
-2. **不影响费用计算**：修正后的 token 分配不会改变最终的费用计算（仍然是 30% 费用）
-3. **提高数据合理性**：修正后的数据更符合 Claude 官方的缓存逻辑
-4. **向后兼容**：如果上游修复了问题，此代码仍然能正常工作
-5. **会话过期**：会话记录24小时后自动过期，Redis会自动清理
-6. **无会话ID时**：如果请求中没有会话ID，将使用默认的分配策略（不区分新旧会话）
+1. **只影响 anyrouter-heibai 账户**：此策略仅对账户名包含 `anyrouter-heibai` 的账户生效
+2. **不修改 token 数值**：完全保持上游返回的原始数据
+3. **30% 费用计费**：用户享受 70% 折扣，只支付原价的 30%
+4. **模型名称后缀**：交易日志中自动添加 `-2api` 后缀，便于识别
+5. **向后兼容**：如果上游修复了数据问题，此代码仍然能正常工作
+
+## 对比旧版本
+
+### 旧版本（v2.0）
+
+- ❌ 复杂的会话追踪逻辑（Redis 会话记录）
+- ❌ Token 重新分配策略（修改原始数据）
+- ❌ 区分新会话和后续请求
+- ✅ 20% 费用计费（80% 折扣）
+
+### 新版本（v4.0）
+
+- ✅ 无会话追踪（简化逻辑）
+- ✅ 保持原始 token 数值（不修改）
+- ✅ 统一处理所有请求
+- ✅ **30% 费用计费（70% 折扣）**
+- ✅ 模型名称自动添加 `-2api` 后缀
+
+## 折扣参数修改清单
+
+### 需要修改的参数位置（v4.0）
+
+所有折扣参数已统一调整为 **0.3**（用户支付 30% 费用，享受 70% 折扣）：
+
+#### 1. 流式 API 折扣参数
+**文件**: [src/services/apiKeyService.js](../src/services/apiKeyService.js#L940)
+**位置**: 第 940 行
+```javascript
+const discountRatio = 0.3 // heibai账户按30%计费（70%折扣）
+```
+
+#### 2. 非流式 API 折扣参数
+**文件**: [src/services/apiKeyService.js](../src/services/apiKeyService.js#L1191)
+**位置**: 第 1191 行
+```javascript
+anyrouterDiscountRatio = 0.3 // heibai账户按30%计费（70%折扣）
+```
+
+#### 3. 相关日志信息更新
+- **第 950 行**: 日志显示 "应用70%折扣"
+- **第 1194 行**: 日志显示 "用户支付30%费用（70%折扣）"
+
+### 折扣对照表
+
+| 设置值 | 用户实际支付 | 折扣力度 | 效果 | 状态 |
+|--------|-------------|---------|------|------|
+| 0.2 | 20% 费用 | 80% 折扣 | 扣费少 ⬇️ | v3.0 旧版 |
+| **0.3** | **30% 费用** | **70% 折扣** | **当前设置** | **v4.0 ✅** |
+| 0.4 | 40% 费用 | 60% 折扣 | 扣费多 ⬆️ | 未使用 |
+| 0.5 | 50% 费用 | 50% 折扣 | 半价 | 未使用 |
 
 ## 更新日志
 
+- **2025-11-18 v4.0**: 调整折扣率从 20% 提升至 30%（用户支付 30% 费用，享受 70% 折扣）
+- **2025-11-16 v3.0**: 简化策略，移除会话追踪和 token 重新分配，改为 20% 费用计费，添加模型名称后缀
 - **2025-11-14 v2.0**: 新增基于会话的智能缓存分配，解决新会话缓存分配不合理的问题
 - **2025-11-14 v1.0**: 初始版本，修复 anyrouter-heibai 账户首次请求异常包含 cache_read 的问题

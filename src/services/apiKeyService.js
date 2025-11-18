@@ -876,6 +876,18 @@ class ApiKeyService {
     accountType = null
   ) {
     try {
+      // 🎯 检测是否为 heibai 账户（用于模型名称后缀，仅 claude-console 类型）
+      let isHeibaiAccount = false
+      if (accountId && accountType === 'claude-console') {
+        try {
+          const claudeConsoleAccountService = require('./claudeConsoleAccountService')
+          const account = await claudeConsoleAccountService.getAccount(accountId)
+          isHeibaiAccount = account?.name?.includes('anyrouter-heibai')
+        } catch (err) {
+          logger.debug(`⚠️ Could not check heibai account: ${err.message}`)
+        }
+      }
+
       // 🎯 智能缓存优化：检测相似请求并应用缓存折扣（只对 anyrouter 账户生效）
       let cacheOptimizationInfo = null
       const smartCacheOptimizer = require('./smartCacheOptimizer')
@@ -921,6 +933,23 @@ class ApiKeyService {
         },
         model
       )
+
+      // 💸 anyrouter-heibai账户特殊折扣：应用30%费用折扣（70%折扣）
+      if (isHeibaiAccount && costInfo.costs.total > 0) {
+        const originalCost = costInfo.costs.total
+        const discountRatio = 0.3 // heibai账户按30%计费（70%折扣）
+
+        // 应用折扣到所有费用组成部分
+        costInfo.costs.total = costInfo.costs.total * discountRatio
+        costInfo.costs.input = (costInfo.costs.input || 0) * discountRatio
+        costInfo.costs.output = (costInfo.costs.output || 0) * discountRatio
+        costInfo.costs.cache_create = (costInfo.costs.cache_create || 0) * discountRatio
+        costInfo.costs.cache_read = (costInfo.costs.cache_read || 0) * discountRatio
+
+        logger.info(
+          `💸 [anyrouter-heibai费用折扣] 应用70%折扣: $${originalCost.toFixed(6)} → $${costInfo.costs.total.toFixed(6)} (节省 $${(originalCost - costInfo.costs.total).toFixed(6)})`
+        )
+      }
 
       // 检查是否为 1M 上下文请求
       let isLongContextRequest = false
@@ -1043,8 +1072,11 @@ class ApiKeyService {
 
       // 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
       try {
+        // 🎯 为 heibai 账户添加 -2api 后缀标识
+        const logModel = isHeibaiAccount ? `${model}-2api(高负载后备渠道)` : model
+
         const transactionLogData = {
-          model,
+          model: logModel,
           inputTokens,
           outputTokens,
           cacheCreateTokens,
@@ -1122,7 +1154,7 @@ class ApiKeyService {
     model = 'unknown',
     accountId = null,
     accountType = null,
-    sessionId = null // 🆕 新增参数：会话ID，用于追踪新会话的第一次请求
+    sessionId = null // 已弃用：此参数保留用于向后兼容，但不再使用
   ) {
     try {
       // 提取 token 数量
@@ -1133,6 +1165,7 @@ class ApiKeyService {
 
       // 🎯 anyrouter账户特殊计费优化
       let isAnyRouterAccount = false // 标记是否为anyrouter账户，用于后续费用折扣
+      let isHeibaiAccount = false // 标记是否为heibai账户，用于模型名称后缀
 
       //  设置值	用户实际支付	折扣力度	效果
       //  0.2	20% 费用	80% 折扣	扣费少 ⬇️
@@ -1142,112 +1175,27 @@ class ApiKeyService {
       //  1.0	100% 费用	无折扣	原价
       let anyrouterDiscountRatio = 0.5 // 用户支付50%折扣
 
-      // 检查是否为anyrouter账户
-      if (accountId && cacheReadTokens > 0) {
+      // 检查是否为anyrouter账户（仅 claude-console 类型）
+      if (accountId && accountType === 'claude-console') {
         try {
-          let account = null
-          if (accountType === 'claude-console') {
-            const claudeConsoleAccountService = require('./claudeConsoleAccountService')
-            account = await claudeConsoleAccountService.getAccount(accountId)
-          } else if (accountType === 'claude-official') {
-            const claudeAccountService = require('./claudeAccountService')
-            account = await claudeAccountService.getAccount(accountId)
-          }
+          const claudeConsoleAccountService = require('./claudeConsoleAccountService')
+          const account = await claudeConsoleAccountService.getAccount(accountId)
 
           // 🎯 明确区分账户类型
-          const isHeibaiAccount = account?.name?.includes('anyrouter-heibai')
+          isHeibaiAccount = account?.name?.includes('anyrouter-heibai')
           const isAnyrouterAnyrouterAccount = account?.name?.includes('anyrouter-anyrouter')
 
-          // 🎯 步骤1：anyrouter-heibai 账户特殊处理（没有真实缓存）
-          if (
-            isHeibaiAccount &&
-            (cacheReadTokens > 0 || (cacheCreateTokens > 0 && cacheReadTokens > 0))
-          ) {
+          // 🎯 步骤1：anyrouter-heibai 账户特殊处理（保持原始token数值，应用30%费用折扣）
+          if (isHeibaiAccount) {
             isAnyRouterAccount = true // 标记为anyrouter账户
-            anyrouterDiscountRatio = 0.3 // heibai账户保留40%费用（60%折扣），多扣费
-
-            // 🎯 优化策略：增加input_tokens显示，减少cache_read，生成合理的cache_create
-            // 目标：用户支付原价的30%费用（70%折扣）
-
-            // 🆕 会话追踪：判断是否为新会话的第一次请求
-            let isFirstRequestInSession = false
-            if (sessionId) {
-              const client = redis.getClientSafe()
-              const sessionKey = `anyrouter_session:${accountId}:${sessionId}`
-              const sessionExists = await client.exists(sessionKey)
-
-              if (!sessionExists) {
-                // 新会话，标记为第一次请求
-                isFirstRequestInSession = true
-                // 记录会话，24小时过期
-                await client.setex(sessionKey, 24 * 60 * 60, Date.now().toString())
-                logger.info(
-                  `🆕 [anyrouter-heibai新会话] 账户"${account.name}"检测到新会话: ${sessionId}`
-                )
-              }
-            }
-
-            // 🔍 智能处理异常情况：同时有 cache_creation 和 cache_read
-            let totalInputTokens = inputTokens
-            if (cacheCreateTokens > 0 && cacheReadTokens > 0) {
-              // ⚠️ 异常情况：第一次请求不应该同时有创建和读取
-              // 将 cache_read 转换为 input_tokens，只保留 cache_creation
-              logger.warn(
-                `⚠️ [anyrouter-heibai异常修正] 账户"${account.name}"首次请求异常：同时存在cache_creation(${cacheCreateTokens})和cache_read(${cacheReadTokens})，将cache_read归入input计算`
-              )
-              totalInputTokens = inputTokens + cacheReadTokens // 将异常的cache_read加入总输入
-              cacheReadTokens = 0 // 重置cache_read为0（首次请求不应该有缓存读取）
-            } else if (cacheReadTokens > 0) {
-              // 正常情况：只有 cache_read，没有 cache_creation
-              totalInputTokens = inputTokens + cacheReadTokens
-            }
-
-            // 🎲 分配策略（随机变化以显示真实性）：
-            let inputRatio, cacheCreateRatio
-
-            if (isFirstRequestInSession) {
-              // 🆕 新会话第一次请求：cache_creation应该占主要比例，cache_read为0
-              inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
-              cacheCreateRatio = Math.random() * 0.1 + 0.6 // 60-70% cache_creation（主要部分）
-              logger.info(
-                `🆕 [anyrouter-heibai新会话首次] 使用首次请求策略: input=${Math.round(inputRatio * 100)}%, cache_create=${Math.round(cacheCreateRatio * 100)}%, cache_read=0%`
-              )
-            } else {
-              // 📚 后续请求：cache_read应该占主要比例，cache_creation为0或很小
-              inputRatio = Math.random() * 0.1 + 0.25 // 25-35% input
-              cacheCreateRatio = Math.random() * 0.03 // 0-3% cache_creation（很小或为0）
-              logger.info(
-                `📚 [anyrouter-heibai后续请求] 使用后续请求策略: input=${Math.round(inputRatio * 100)}%, cache_create=${Math.round(cacheCreateRatio * 100)}%, cache_read=主要部分`
-              )
-            }
-
-            const calculatedInputTokens = Math.floor(totalInputTokens * inputRatio)
-            const minInputTokens = 500 // 最小输入 tokens，确保显示合理
-
-            // 确保 input_tokens 至少为最小值
-            const newInputTokens = Math.max(calculatedInputTokens, minInputTokens)
-            const newCacheCreateTokens = Math.floor(totalInputTokens * cacheCreateRatio)
-            const newCacheReadTokens = Math.max(
-              0,
-              totalInputTokens - newInputTokens - newCacheCreateTokens
-            )
-
-            // 更新tokens分配
-            inputTokens = newInputTokens
-            cacheCreateTokens = newCacheCreateTokens
-            cacheReadTokens = newCacheReadTokens
+            anyrouterDiscountRatio = 0.3 // heibai账户按30%计费（70%折扣）
 
             logger.info(
-              `💰 [anyrouter-heibai特殊计费] 账户"${account.name}"${isFirstRequestInSession ? '【新会话】' : '【后续请求】'}优化token分配: input=${newInputTokens}(${Math.round(inputRatio * 100)}%), cache_create=${newCacheCreateTokens}(${Math.round(cacheCreateRatio * 100)}%), cache_read=${newCacheReadTokens}, 用户支付30%费用（70%折扣）`
+              `💰 [anyrouter-heibai特殊计费] 账户"${account.name}"保持原始token数值: input=${inputTokens}, cache_create=${cacheCreateTokens}, cache_read=${cacheReadTokens}, 用户支付30%费用（70%折扣）`
             )
-
-            // 更新usageObject
-            usageObject.input_tokens = newInputTokens
-            usageObject.cache_creation_input_tokens = newCacheCreateTokens
-            usageObject.cache_read_input_tokens = newCacheReadTokens
           }
-          // 🎯 步骤2：anyrouter-anyrouter 账户优化（有真实缓存）
-          else if (isAnyrouterAnyrouterAccount && cacheCreateTokens > 0) {
+          // 🎯 步骤2：anyrouter-anyrouter 账户优化（有真实缓存，需要有缓存tokens才处理）
+          else if (isAnyrouterAnyrouterAccount && (cacheCreateTokens > 0 || cacheReadTokens > 0)) {
             isAnyRouterAccount = true // 标记为anyrouter账户，后续应用40%费用（用户支付40%）
 
             // 只对 anyrouter-anyrouter 账户进行缓存转换优化
@@ -1257,7 +1205,7 @@ class ApiKeyService {
             const tokensToKeep = cacheCreateTokens - tokensToConvert
 
             logger.info(
-              `💰 [anyrouter-anyrouter优化计费] 账户"${account.name}"命中真实缓存(cache_create=${cacheCreateTokens}, cache_read=${cacheReadTokens})，随机转换${tokensToConvert}创建tokens(${Math.round(conversionRatio * 100)}%)为读取计费，保留${tokensToKeep}创建tokens (1.25x → 0.1x)`
+              `💰 [anyrouter-anyrouter优化计费] 账户"${account.name}"命中真实缓存(cache_create=${cacheCreateTokens}, cache_read=${cacheReadTokens})，随机转换${tokensToConvert}创建tokens(${Math.round(conversionRatio * 100)}%)为读取计费，保留${tokensToKeep}创建tokens (1.25x → 0.2x)`
             )
 
             // 转换：部分缓存创建 → 缓存读取
@@ -1346,7 +1294,7 @@ class ApiKeyService {
       // 💸 anyrouter账户特殊折扣：在Token转换优化后应用费用折扣
       if (isAnyRouterAccount && costInfo.totalCost > 0) {
         const originalCost = costInfo.totalCost
-        // 使用账户特定的折扣率（heibai: 23%, anyrouter: 50%）
+        // 使用账户特定的折扣率（heibai: 10%, anyrouter: 50%）
         const discountRatio = anyrouterDiscountRatio
 
         // 应用折扣到所有费用组成部分
@@ -1493,8 +1441,11 @@ class ApiKeyService {
 
       // 📝 记录交易日志（用于前端查询）- 使用消费后的实际余额
       try {
+        // 🎯 为 heibai 账户添加 -2api 后缀标识
+        const logModel = isHeibaiAccount ? `${model}-2api(高负载后备渠道)` : model
+
         await redis.addTransactionLog(keyId, {
-          model,
+          model: logModel,
           inputTokens,
           outputTokens,
           cacheCreateTokens,

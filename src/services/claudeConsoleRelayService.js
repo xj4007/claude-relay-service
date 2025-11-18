@@ -3,6 +3,8 @@ const { v4: uuidv4 } = require('uuid')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
 const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
+const responseCacheService = require('./responseCacheService')
+const sessionHelper = require('../utils/sessionHelper')
 const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
@@ -261,6 +263,31 @@ class ClaudeConsoleRelayService {
         model: mappedModel
       }
 
+      // 🎯 检查响应缓存（仅非流式请求）
+      const isStreamRequest = requestBody.stream === true
+      const sessionHash = sessionHelper.generateSessionHash(modifiedRequestBody, apiKeyData.id)
+      const cacheKey = responseCacheService.generateCacheKey(
+        modifiedRequestBody,
+        mappedModel,
+        sessionHash
+      )
+
+      if (!isStreamRequest && cacheKey) {
+        const cachedResponse = await responseCacheService.getCachedResponse(cacheKey)
+        if (cachedResponse) {
+          // 缓存命中，直接返回
+          logger.info(
+            `🎯 [CACHE-HIT] Returning cached response | Key: ${apiKeyData.name} | Acc: ${account.name}`
+          )
+          return {
+            statusCode: cachedResponse.statusCode,
+            headers: cachedResponse.headers,
+            body: cachedResponse.body,
+            usage: cachedResponse.usage
+          }
+        }
+      }
+
       // 处理统一的客户端标识
       if (account && account.useUnifiedClientId && account.unifiedClientId) {
         this._replaceClientId(modifiedRequestBody, account.unifiedClientId)
@@ -486,6 +513,30 @@ class ClaudeConsoleRelayService {
         logger.warn(
           `⚠️ Client timeout too short! Upstream responded in ${upstreamDuration}ms but client already disconnected`
         )
+
+        // 💾 缓存响应（仅非流式且成功的响应）
+        if (!isStreamRequest && response.status === 200 && cacheKey && response.data) {
+          // 解析usage信息（如果有）
+          let usage = null
+          if (response.data.usage) {
+            usage = response.data.usage
+          }
+
+          responseCacheService
+            .cacheResponse(
+              cacheKey,
+              {
+                statusCode: response.status,
+                headers: response.headers,
+                body: response.data,
+                usage
+              },
+              180 // TTL: 3分钟
+            )
+            .catch((err) => {
+              logger.error(`❌ Failed to cache response: ${err.message}`)
+            })
+        }
       } else {
         // 正常响应
         const responseTimeEmoji =

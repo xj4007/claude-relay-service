@@ -15,6 +15,7 @@ const { getEffectiveModel, parseVendorPrefixedModel } = require('../utils/modelH
 const sessionHelper = require('../utils/sessionHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const retryManager = require('../utils/retryManager')
+const responseCacheService = require('../services/responseCacheService')
 const {
   convertJsonToSSEStream,
   sendSSEError,
@@ -283,18 +284,13 @@ async function handleMessagesRequest(req, res) {
                     }
                   }
 
-                  // 🆕 提取会话ID（用于 anyrouter-heibai 账户的会话追踪）
-                  const sessionHelper = require('../utils/sessionHelper')
-                  const sessionId = sessionHelper.extractSessionUUID(req.body)
-
                   apiKeyService
                     .recordUsageWithDetails(
                       req.apiKey.id,
                       usageObject,
                       model,
                       usageAccountId,
-                      'claude',
-                      sessionId // 🆕 传递会话ID
+                      'claude'
                     )
                     .catch((error) => {
                       logger.error('❌ Failed to record stream usage:', error)
@@ -387,18 +383,13 @@ async function handleMessagesRequest(req, res) {
                     }
                   }
 
-                  // 🆕 提取会话ID（用于 anyrouter-heibai 账户的会话追踪）
-                  const sessionHelper = require('../utils/sessionHelper')
-                  const sessionId = sessionHelper.extractSessionUUID(req.body)
-
                   apiKeyService
                     .recordUsageWithDetails(
                       req.apiKey.id,
                       usageObject,
                       model,
                       usageAccountId,
-                      'claude-console',
-                      sessionId // 🆕 传递会话ID
+                      'claude-console'
                     )
                     .catch((error) => {
                       logger.error('❌ Failed to record stream usage:', error)
@@ -824,8 +815,18 @@ async function handleMessagesRequest(req, res) {
       const sessionHash = sessionHelper.generateSessionHash(req.body, req.apiKey.id)
       const requestedModel = req.body.model
 
-      // 🔄 使用 retryManager 执行带重试的请求
-      const result = await retryManager.executeWithRetry(
+      // 生成缓存键（使用 sessionHash 确保会话隔离）
+      const cacheKey = responseCacheService.generateCacheKey(req.body, requestedModel, sessionHash)
+      logger.debug(
+        `📋 Generated cache key: ${cacheKey ? `${cacheKey.substring(0, 16)}...` : 'none'} | Session: ${sessionHash ? sessionHash.substring(0, 8) : 'none'}... | ApiKey: ${req.apiKey.name}`
+      )
+
+      // 🎯 使用缓存或执行新请求（自动处理请求去重）
+      const response = await responseCacheService.getOrFetchResponse(
+        cacheKey,
+        async () => {
+          // 🔄 使用 retryManager 执行带重试的请求
+          const result = await retryManager.executeWithRetry(
             // 请求函数
             async (selectedAccountId, selectedAccountType) => {
               logger.debug(
@@ -950,31 +951,45 @@ async function handleMessagesRequest(req, res) {
             }
           )
 
-      // 检查重试结果
-      if (!result.success) {
-        logger.error(
-          `❌ All retry attempts failed after ${result.attempts} attempts`,
-          result.error
-        )
+          // 检查重试结果
+          if (!result.success) {
+            logger.error(
+              `❌ All retry attempts failed after ${result.attempts} attempts`,
+              result.error
+            )
 
-        // 如果是限流错误，返回特殊响应
-        if (result.error.isRateLimitError) {
-          return res.status(403).json({
-            error: 'upstream_rate_limited',
-            message: result.error.message
-          })
-        }
+            // 如果是限流错误，返回特殊响应
+            if (result.error.isRateLimitError) {
+              return {
+                statusCode: 403,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  error: 'upstream_rate_limited',
+                  message: result.error.message
+                })
+              }
+            }
 
-        // 其他错误返回500
-        return res.status(500).json({
-          error: 'all_retry_attempts_failed',
-          message: result.error?.message || 'All upstream requests failed',
-          attempts: result.attempts,
-          excludedAccounts: result.excludedAccounts || []
-        })
-      }
+            // 其他错误返回500
+            return {
+              statusCode: 500,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                error: 'all_retry_attempts_failed',
+                message: result.error?.message || 'All upstream requests failed',
+                attempts: result.attempts,
+                excludedAccounts: result.excludedAccounts || []
+              })
+            }
+          }
 
-      const response = result.response
+          logger.info(
+            `✅ Request succeeded after ${result.attempts} attempt(s) using account ${result.accountId}`
+          )
+          return result.response
+        },
+        300 // 5分钟TTL
+      )
 
       // 检查是否是错误响应，需要进行智能过滤
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1011,8 +1026,15 @@ async function handleMessagesRequest(req, res) {
 
         logger.info('📊 Parsed upstream response:', JSON.stringify(jsonData, null, 2))
 
-        // 检查是否为共享响应（请求去重）
+        // 🔒 检查是否应该跳过usage记录（防止重复扣费）
+        const isCachedResponse = response.cachedAt && response.cachedAt > 0
         const isSharedResponse = response.isSharedResponse === true
+
+        if (isCachedResponse) {
+          logger.info(
+            '💾 Response from cache, skipping usage recording to prevent duplicate charging'
+          )
+        }
 
         if (isSharedResponse) {
           logger.info(
@@ -1022,6 +1044,7 @@ async function handleMessagesRequest(req, res) {
 
         // 从响应中提取usage信息（完整的token分类体系）
         if (
+          !isCachedResponse &&
           !isSharedResponse &&
           jsonData.usage &&
           jsonData.usage.input_tokens !== undefined &&
@@ -1066,7 +1089,7 @@ async function handleMessagesRequest(req, res) {
           logger.api(
             `📊 Non-stream usage recorded - Model: ${model}, Input: ${inputTokens}, Output: ${outputTokens}, Cache Create: ${cacheCreateTokens}, Cache Read: ${cacheReadTokens}, Total: ${inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens} tokens`
           )
-        } else if (!isSharedResponse) {
+        } else if (!isCachedResponse && !isSharedResponse) {
           logger.warn('⚠️ No usage data found in response')
         }
 
