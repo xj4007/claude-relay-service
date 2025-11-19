@@ -10,23 +10,47 @@ class ClaudeCodeHeadersService {
   constructor() {
     // 🔒 统一请求头配置 - 所有请求都使用这个固定配置，防止上游检测多账号
     // 注意：anthropic-beta 不在这里设置，需要根据模型动态获取
+    /*
+      2025-11-19
+
+      connection: keep-alive
+      Accept: application/json
+      X-Stainless-Retry-Count: 0
+      X-Stainless-Timeout: 600
+      X-Stainless-Lang: js
+      X-Stainless-Package-Version: 0.70.0
+      X-Stainless-OS: Windows
+      X-Stainless-Arch: x64
+      X-Stainless-Runtime: node
+      X-Stainless-Runtime-Version: v20.19.1
+      anthropic-dangerous-direct-browser-access: true
+      anthropic-version: 2023-06-01
+      x-app: cli
+      User-Agent: claude-cli/2.0.46 (external, cli)
+      content-type: application/json
+      anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14
+      x-stainless-helper-method: stream
+      accept-language: *
+      sec-fetch-mode: cors
+      accept-encoding: gzip, deflate
+    */
     this.unifiedHeaders = {
       connection: 'keep-alive',
       accept: 'application/json',
       'x-stainless-retry-count': '0',
       'x-stainless-timeout': '600',
       'x-stainless-lang': 'js',
-      'x-stainless-package-version': '0.60.0',
+      'x-stainless-package-version': '0.70.0',
       'x-stainless-os': 'Windows',
       'x-stainless-arch': 'x64',
       'x-stainless-runtime': 'node',
       'x-stainless-runtime-version': 'v20.19.1',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
-      'user-agent': 'claude-cli/2.0.36 (external, cli)',
+      'user-agent': 'claude-cli/2.0.46 (external, cli)',
       'accept-language': '*',
       'sec-fetch-mode': 'cors',
-      'accept-encoding': 'br, gzip, deflate',
+      'accept-encoding': 'gzip, deflate',
       'x-stainless-helper-method': 'stream'
     }
 

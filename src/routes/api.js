@@ -201,7 +201,7 @@ async function handleMessagesRequest(req, res) {
             req.apiKey,
             sessionHash,
             requestedModel,
-            { excludedAccounts }
+            { excludedAccounts, requestBody: req.body }
           )
           ;({ accountId, accountType } = selection)
 
@@ -730,7 +730,7 @@ async function handleMessagesRequest(req, res) {
                 req.apiKey,
                 fallbackSessionHash,
                 fallbackRequestedModel,
-                { excludedAccounts: allExcluded }
+                { excludedAccounts: allExcluded, requestBody: req.body }
               )
               return selection
             },
@@ -943,7 +943,7 @@ async function handleMessagesRequest(req, res) {
                   req.apiKey,
                   sessionHash,
                   requestedModel,
-                  { excludedAccounts }
+                  { excludedAccounts, requestBody: req.body }
                 )
                 return selection
               } catch (error) {
@@ -1420,7 +1420,8 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
     const { accountId, accountType } = await unifiedClaudeScheduler.selectAccountForApiKey(
       req.apiKey,
       sessionHash,
-      requestedModel
+      requestedModel,
+      { requestBody: req.body }
     )
 
     if (accountType === 'ccr') {

@@ -1981,8 +1981,14 @@ class RedisClient {
   // 添加 sessionId 到账户追踪列表（使用 Sorted Set 存储，按时间戳排序）
   async addAccountSessionId(accountId, sessionId, windowMinutes) {
     try {
+      logger.info(
+        `🔍 [Redis-SessionId] addAccountSessionId called: accountId=${accountId}, sessionId=${sessionId}, windowMinutes=${windowMinutes}`
+      )
+
       if (!accountId || !sessionId || !windowMinutes) {
-        logger.warn('⚠️ Missing required parameters for addAccountSessionId')
+        logger.warn(
+          `⚠️ [Redis-SessionId] Missing required parameters: accountId=${!!accountId}, sessionId=${!!sessionId}, windowMinutes=${!!windowMinutes}`
+        )
         return
       }
 
@@ -1991,6 +1997,10 @@ class RedisClient {
       const windowMs = windowMinutes * 60 * 1000
       const windowStart = now - windowMs
       const client = this.getClientSafe()
+
+      logger.info(
+        `🔍 [Redis-SessionId] Executing Lua script: key=${key}, now=${now}, windowStart=${windowStart}`
+      )
 
       // 使用 Lua 脚本确保原子操作
       const luaScript = `
@@ -2016,13 +2026,13 @@ class RedisClient {
       const ttlSeconds = Math.ceil((windowMs * 2) / 1000)
       const count = await client.eval(luaScript, 1, key, sessionId, now, windowStart, ttlSeconds)
 
-      logger.database(
-        `📋 Added sessionId ${sessionId.substring(0, 8)}... to account ${accountId} (count: ${count}, window: ${windowMinutes}min)`
+      logger.info(
+        `✅ [Redis-SessionId] Successfully added sessionId ${sessionId} to account ${accountId} (count: ${count}, window: ${windowMinutes}min, key: ${key})`
       )
 
       return parseInt(count || 0)
     } catch (error) {
-      logger.error('❌ Failed to add account sessionId:', error)
+      logger.error(`❌ [Redis-SessionId] Failed to add account sessionId:`, error)
       // 不抛出错误，避免影响正常请求流程
       return 0
     }

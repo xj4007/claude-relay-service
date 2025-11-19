@@ -192,7 +192,8 @@ class UnifiedClaudeScheduler {
             sessionHash,
             effectiveModel,
             vendor === 'ccr',
-            excludedAccounts
+            excludedAccounts,
+            requestBody
           )
         }
 
@@ -220,6 +221,40 @@ class UnifiedClaudeScheduler {
             logger.info(
               `🎯 Using bound dedicated Claude OAuth account: ${boundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
             )
+
+            // 📋 记录 sessionId 到账户追踪列表（如果启用了 sessionId 限制）
+            logger.info(
+              `🔍 [SessionId-Bound-Official] Step 1: requestBody exists: ${!!requestBody}`
+            )
+            if (requestBody) {
+              const currentSessionId = sessionHelper.extractSessionUUID(requestBody)
+              logger.info(
+                `🔍 [SessionId-Bound-Official] Step 2: Extracted sessionId: ${currentSessionId || 'NULL'}`
+              )
+
+              if (currentSessionId) {
+                const sessionIdLimitEnabled =
+                  boundAccount.sessionIdLimitEnabled === 'true' ||
+                  boundAccount.sessionIdLimitEnabled === true
+                const windowMinutes = parseInt(boundAccount.sessionIdWindowMinutes) || 0
+
+                logger.info(
+                  `🔍 [SessionId-Bound-Official] Step 3: enabled=${sessionIdLimitEnabled}, window=${windowMinutes}, account=${boundAccount.name}`
+                )
+
+                if (sessionIdLimitEnabled && windowMinutes > 0) {
+                  await redis.addAccountSessionId(boundAccount.id, currentSessionId, windowMinutes)
+                  logger.info(
+                    `✅ [SessionId-Bound-Official] Recorded sessionId ${currentSessionId} for bound official account ${boundAccount.name} (window: ${windowMinutes}min)`
+                  )
+                } else {
+                  logger.warn(
+                    `⚠️ [SessionId-Bound-Official] SessionId limit not enabled for ${boundAccount.name}`
+                  )
+                }
+              }
+            }
+
             return {
               accountId: apiKeyData.claudeAccountId,
               accountType: 'claude-official'
@@ -246,6 +281,42 @@ class UnifiedClaudeScheduler {
           logger.info(
             `🎯 Using bound dedicated Claude Console account: ${boundConsoleAccount.name} (${apiKeyData.claudeConsoleAccountId}) for API key ${apiKeyData.name}`
           )
+
+          // 📋 记录 sessionId 到账户追踪列表（如果启用了 sessionId 限制）
+          logger.info(`🔍 [SessionId-Bound-Console] Step 1: requestBody exists: ${!!requestBody}`)
+          if (requestBody) {
+            const currentSessionId = sessionHelper.extractSessionUUID(requestBody)
+            logger.info(
+              `🔍 [SessionId-Bound-Console] Step 2: Extracted sessionId: ${currentSessionId || 'NULL'}`
+            )
+
+            if (currentSessionId) {
+              const sessionIdLimitEnabled =
+                boundConsoleAccount.sessionIdLimitEnabled === 'true' ||
+                boundConsoleAccount.sessionIdLimitEnabled === true
+              const windowMinutes = parseInt(boundConsoleAccount.sessionIdWindowMinutes) || 0
+
+              logger.info(
+                `🔍 [SessionId-Bound-Console] Step 3: enabled=${sessionIdLimitEnabled}, window=${windowMinutes}, account=${boundConsoleAccount.name}`
+              )
+
+              if (sessionIdLimitEnabled && windowMinutes > 0) {
+                await redis.addAccountSessionId(
+                  boundConsoleAccount.id,
+                  currentSessionId,
+                  windowMinutes
+                )
+                logger.info(
+                  `✅ [SessionId-Bound-Console] Recorded sessionId ${currentSessionId} for bound console account ${boundConsoleAccount.name} (window: ${windowMinutes}min)`
+                )
+              } else {
+                logger.warn(
+                  `⚠️ [SessionId-Bound-Console] SessionId limit not enabled for ${boundConsoleAccount.name}`
+                )
+              }
+            }
+          }
+
           return {
             accountId: apiKeyData.claudeConsoleAccountId,
             accountType: 'claude-console'
@@ -292,7 +363,8 @@ class UnifiedClaudeScheduler {
           effectiveModel,
           {
             excludedAccounts,
-            vendor
+            vendor,
+            requestBody
           }
         )
         if (reusedAccount) {
@@ -341,6 +413,66 @@ class UnifiedClaudeScheduler {
       logger.info(
         `🎯 Selected account: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) with priority ${selectedAccount.priority} for API key ${apiKeyData.name}`
       )
+
+      // 📋 记录 sessionId 到账户追踪列表（如果启用了 sessionId 限制）
+      logger.info(`🔍 [SessionId-Debug] Step 1: Checking if requestBody exists: ${!!requestBody}`)
+      if (requestBody) {
+        logger.info(
+          `🔍 [SessionId-Debug] Step 2: RequestBody exists, metadata: ${JSON.stringify(requestBody.metadata || {})}`
+        )
+        const currentSessionId = sessionHelper.extractSessionUUID(requestBody)
+        logger.info(
+          `🔍 [SessionId-Debug] Step 3: Extracted sessionId: ${currentSessionId || 'NULL'}`
+        )
+
+        if (currentSessionId) {
+          // 检查选中的账户是否启用了 sessionId 限制
+          const accountType = selectedAccount.accountType
+          logger.info(
+            `🔍 [SessionId-Debug] Step 4: Account type: ${accountType}, name: ${selectedAccount.name}`
+          )
+
+          if (accountType === 'claude-official' || accountType === 'claude-console') {
+            const sessionIdLimitEnabled =
+              selectedAccount.sessionIdLimitEnabled === 'true' ||
+              selectedAccount.sessionIdLimitEnabled === true
+            const windowMinutes = parseInt(selectedAccount.sessionIdWindowMinutes) || 0
+
+            logger.info(
+              `🔍 [SessionId-Debug] Step 5: sessionIdLimitEnabled=${sessionIdLimitEnabled}, windowMinutes=${windowMinutes}, maxCount=${selectedAccount.sessionIdMaxCount}`
+            )
+
+            if (sessionIdLimitEnabled && windowMinutes > 0) {
+              logger.info(
+                `🔍 [SessionId-Debug] Step 6: Calling redis.addAccountSessionId(${selectedAccount.accountId}, ${currentSessionId}, ${windowMinutes})`
+              )
+              // 记录 sessionId 到 Redis
+              await redis.addAccountSessionId(
+                selectedAccount.accountId,
+                currentSessionId,
+                windowMinutes
+              )
+              logger.info(
+                `✅ [SessionId-Success] Recorded sessionId ${currentSessionId} for account ${selectedAccount.name} (window: ${windowMinutes}min)`
+              )
+            } else {
+              logger.warn(
+                `⚠️ [SessionId-Skip] SessionId limit not enabled or invalid config for account ${selectedAccount.name}`
+              )
+            }
+          } else {
+            logger.info(
+              `🔍 [SessionId-Debug] Step 5-Skip: Account type ${accountType} not eligible for sessionId tracking`
+            )
+          }
+        } else {
+          logger.warn(
+            `⚠️ [SessionId-Debug] Step 3-Failed: Could not extract sessionId from requestBody`
+          )
+        }
+      } else {
+        logger.warn(`⚠️ [SessionId-Debug] Step 1-Failed: requestBody is null or undefined`)
+      }
 
       return {
         accountId: selectedAccount.accountId,
@@ -1018,7 +1150,12 @@ class UnifiedClaudeScheduler {
       return null
     }
 
-    const { excludedAccounts = [], vendor = null, allowedAccountIds = null } = options
+    const {
+      excludedAccounts = [],
+      vendor = null,
+      allowedAccountIds = null,
+      requestBody = null
+    } = options
     const { accountId } = mappedAccount
     const { accountType } = mappedAccount
 
@@ -1072,6 +1209,75 @@ class UnifiedClaudeScheduler {
       logger.info(
         `🎯 Using sticky session account: ${accountId} (${accountType}) for session ${sessionHash}`
       )
+
+      // 📋 检查并记录 sessionId 到账户追踪列表（如果启用了 sessionId 限制）
+      logger.info(
+        `🔍 [SessionId-Sticky] Step 1: requestBody exists: ${!!requestBody}, accountType: ${accountType}`
+      )
+      if (requestBody && (accountType === 'claude-official' || accountType === 'claude-console')) {
+        const currentSessionId = sessionHelper.extractSessionUUID(requestBody)
+        logger.info(
+          `🔍 [SessionId-Sticky] Step 2: Extracted sessionId: ${currentSessionId || 'NULL'}`
+        )
+
+        if (currentSessionId) {
+          // 获取完整账户信息以检查配置
+          let account = null
+          if (accountType === 'claude-official') {
+            account = await redis.getClaudeAccount(accountId)
+          } else if (accountType === 'claude-console') {
+            account = await claudeConsoleAccountService.getAccount(accountId)
+          }
+
+          if (account) {
+            const sessionIdLimitEnabled =
+              account.sessionIdLimitEnabled === 'true' || account.sessionIdLimitEnabled === true
+            const windowMinutes = parseInt(account.sessionIdWindowMinutes) || 0
+            const maxCount = parseInt(account.sessionIdMaxCount) || 0
+
+            logger.info(
+              `🔍 [SessionId-Sticky] Step 3: enabled=${sessionIdLimitEnabled}, window=${windowMinutes}, maxCount=${maxCount}, account=${account.name || accountId}`
+            )
+
+            if (sessionIdLimitEnabled && windowMinutes > 0 && maxCount > 0) {
+              // 🔍 先检查限制
+              const sessionIds = await redis.getAccountSessionIds(accountId, windowMinutes)
+              const currentCount = sessionIds.length
+              const sessionIdList = sessionIds.map((s) => s.sessionId)
+              const isCurrentSessionInList = sessionIdList.includes(currentSessionId)
+
+              logger.info(
+                `🔍 [SessionId-Sticky] Step 4: Current count=${currentCount}/${maxCount}, isInList=${isCurrentSessionInList}, sessionId=${currentSessionId}`
+              )
+
+              // 如果已满且当前 session 不在列表中，拒绝使用该账户
+              if (currentCount >= maxCount && !isCurrentSessionInList) {
+                logger.warn(
+                  `🚫 [SessionId-Sticky] Sticky account ${account.name || accountId} reached sessionId limit: ${currentCount}/${maxCount} (current session not in list, window: ${windowMinutes}min)`
+                )
+                // 删除粘性会话映射，强制选择新账户
+                await this._deleteSessionMapping(sessionHash)
+                logger.info(
+                  `🧹 [SessionId-Sticky] Cleared sticky session mapping for session ${sessionHash} due to sessionId limit`
+                )
+                // 返回特殊对象，告诉调用方需要排除该账户
+                return { excludeAccountId: accountId, reason: 'sessionId_limit' }
+              }
+
+              // ✅ 通过检查，记录 sessionId
+              await redis.addAccountSessionId(accountId, currentSessionId, windowMinutes)
+              logger.info(
+                `✅ [SessionId-Sticky] Recorded sessionId ${currentSessionId} for sticky account ${account.name || accountId} (${currentCount + 1}/${maxCount}, window: ${windowMinutes}min)`
+              )
+            } else {
+              logger.warn(
+                `⚠️ [SessionId-Sticky] SessionId limit not enabled or invalid config for account ${account.name || accountId}`
+              )
+            }
+          }
+        }
+      }
+
       return mappedAccount
     }
 
@@ -1520,7 +1726,8 @@ class UnifiedClaudeScheduler {
     sessionHash = null,
     requestedModel = null,
     allowCcr = false,
-    excludedAccounts = []
+    excludedAccounts = [],
+    requestBody = null
   ) {
     try {
       // 获取分组信息
@@ -1547,10 +1754,18 @@ class UnifiedClaudeScheduler {
           {
             excludedAccounts,
             vendor: allowCcr ? 'ccr' : null,
-            allowedAccountIds: memberIdSet
+            allowedAccountIds: memberIdSet,
+            requestBody
           }
         )
-        if (reusedAccount) {
+        // 🔍 检查是否因 sessionId 限制被拒绝
+        if (reusedAccount && reusedAccount.excludeAccountId) {
+          logger.info(
+            `🚫 [SessionId-Limit] Account ${reusedAccount.excludeAccountId} excluded due to ${reusedAccount.reason}, adding to excludedAccounts`
+          )
+          excludedAccounts.push(reusedAccount.excludeAccountId)
+          // 继续往下走，重新选择账户
+        } else if (reusedAccount) {
           return reusedAccount
         }
       }
