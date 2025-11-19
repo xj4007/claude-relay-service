@@ -75,12 +75,7 @@ async function fixTransactionLogQuota() {
         const twelveHoursAgo = now - 12 * 60 * 60 * 1000
 
         // 获取最近12小时的所有日志（按时间倒序）
-        const logs = await client.zrevrangebyscore(
-          logKey,
-          now,
-          twelveHoursAgo,
-          'WITHSCORES'
-        )
+        const logs = await client.zrevrangebyscore(logKey, now, twelveHoursAgo, 'WITHSCORES')
 
         if (logs.length === 0) {
           logger.debug(`   ℹ️  No transaction logs found`)
@@ -111,7 +106,7 @@ async function fixTransactionLogQuota() {
 
         // 获取当前的总成本
         const currentCostStats = await redis.getCostStats(keyId, true)
-        let runningTotalCost = currentCostStats.total || 0
+        const runningTotalCost = currentCostStats.total || 0
 
         logger.debug(`   💰 Current total cost: $${runningTotalCost.toFixed(6)}`)
 
@@ -127,7 +122,7 @@ async function fixTransactionLogQuota() {
           if (i < parsedLogs.length - 1) {
             // 减去后续所有日志的消费
             for (let j = i + 1; j < parsedLogs.length; j++) {
-              totalCostAtTime -= (parsedLogs[j].log.cost || 0)
+              totalCostAtTime -= parsedLogs[j].log.cost || 0
             }
           }
 
@@ -196,7 +191,7 @@ async function fixTransactionLogQuota() {
     }
 
     // 输出统计信息
-    logger.info('\n' + '='.repeat(60))
+    logger.info(`\n${'='.repeat(60)}`)
     logger.info('📊 Fix Transaction Log Quota - Summary')
     logger.info('='.repeat(60))
     logger.info(`Mode: ${isDryRun ? 'DRY RUN (no changes made)' : 'LIVE (changes applied)'}`)

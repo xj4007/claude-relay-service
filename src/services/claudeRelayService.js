@@ -131,7 +131,8 @@ class ClaudeRelayService {
         accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
           apiKeyData,
           sessionHash,
-          requestBody.model
+          requestBody.model,
+          { requestBody } // 传递 requestBody 用于 sessionId 限制检查
         )
       } catch (error) {
         if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
@@ -1090,7 +1091,8 @@ class ClaudeRelayService {
         accountSelection = await unifiedClaudeScheduler.selectAccountForApiKey(
           apiKeyData,
           sessionHash,
-          requestBody.model
+          requestBody.model,
+          { requestBody } // 传递 requestBody 用于 sessionId 限制检查
         )
       } catch (error) {
         if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {

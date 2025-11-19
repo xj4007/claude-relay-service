@@ -42,8 +42,8 @@ class ResponseCacheService {
       // 构建缓存键的内容（包含所有影响输出的参数）
       // ⚠️ 必须按固定顺序构建，确保相同内容生成相同哈希
       const cacheContent = {
-        sessionHash: sessionHash, // 🔒 首先包含会话哈希确保会话隔离（sessionHash已包含apiKeyId）
-        model: model,
+        sessionHash, // 🔒 首先包含会话哈希确保会话隔离（sessionHash已包含apiKeyId）
+        model,
         messages: requestBody.messages || [],
         system: requestBody.system || '',
         max_tokens: requestBody.max_tokens,
@@ -74,7 +74,9 @@ class ResponseCacheService {
    * @returns {Object|null} - 缓存的响应，如果不存在则返回 null
    */
   async getCachedResponse(cacheKey) {
-    if (!cacheKey) return null
+    if (!cacheKey) {
+      return null
+    }
 
     try {
       const client = redis.getClientSafe()
@@ -190,7 +192,9 @@ class ResponseCacheService {
    * @param {number} ttl - 过期时间（秒）
    */
   async cacheResponse(cacheKey, response, ttl = this.DEFAULT_TTL) {
-    if (!cacheKey) return
+    if (!cacheKey) {
+      return
+    }
 
     try {
       const client = redis.getClientSafe()
@@ -231,7 +235,9 @@ class ResponseCacheService {
    * @returns {Array|null} - 缓存的 chunks 数组，如果不存在则返回 null
    */
   async getCachedStream(cacheKey) {
-    if (!cacheKey) return null
+    if (!cacheKey) {
+      return null
+    }
 
     try {
       const client = redis.getClientSafe()
@@ -266,7 +272,9 @@ class ResponseCacheService {
    * @returns {Object} - 缓存收集器对象
    */
   createStreamCacheCollector(cacheKey) {
-    if (!cacheKey) return null
+    if (!cacheKey) {
+      return null
+    }
 
     const chunks = []
     let totalSize = 0
@@ -358,7 +366,9 @@ class ResponseCacheService {
    * @param {string} cacheKey - 缓存键
    */
   async clearCache(cacheKey) {
-    if (!cacheKey) return
+    if (!cacheKey) {
+      return
+    }
 
     try {
       const client = redis.getClientSafe()
@@ -383,7 +393,9 @@ class ResponseCacheService {
       let totalResponseSize = 0
       for (const key of responseCacheKeys) {
         const body = await client.hget(key, 'body')
-        if (body) totalResponseSize += body.length
+        if (body) {
+          totalResponseSize += body.length
+        }
       }
 
       // 统计流式缓存

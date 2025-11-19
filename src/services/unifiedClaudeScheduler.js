@@ -6,6 +6,7 @@ const accountGroupService = require('./accountGroupService')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { parseVendorPrefixedModel } = require('../utils/modelHelper')
+const sessionHelper = require('../utils/sessionHelper')
 const config = require('../../config/config')
 
 class UnifiedClaudeScheduler {
@@ -147,8 +148,8 @@ class UnifiedClaudeScheduler {
     options = {}
   ) {
     try {
-      // 🔄 支持排除账户列表（用于重试机制）
-      const { excludedAccounts = [] } = options
+      // 🔄 支持排除账户列表（用于重试机制）和 requestBody（用于 sessionId 限制）
+      const { excludedAccounts = [], requestBody = null } = options
 
       if (excludedAccounts.length > 0) {
         logger.debug(
@@ -304,7 +305,8 @@ class UnifiedClaudeScheduler {
         apiKeyData,
         effectiveModel,
         false, // 仅前缀才走 CCR：默认池不包含 CCR 账户
-        excludedAccounts // 排除的账户列表
+        excludedAccounts, // 排除的账户列表
+        requestBody // 传递 requestBody 用于 sessionId 限制检查
       )
 
       if (availableAccounts.length === 0) {
@@ -355,13 +357,23 @@ class UnifiedClaudeScheduler {
     apiKeyData,
     requestedModel = null,
     includeCcr = false,
-    excludedAccounts = []
+    excludedAccounts = [],
+    requestBody = null
   ) {
     const availableAccounts = []
     const isOpusRequest =
       requestedModel && typeof requestedModel === 'string'
         ? requestedModel.toLowerCase().includes('opus')
         : false
+
+    // 📋 从 requestBody 中提取 sessionId（用于 sessionId 限制检查）
+    let currentSessionId = null
+    if (requestBody) {
+      currentSessionId = sessionHelper.extractSessionUUID(requestBody)
+      if (currentSessionId) {
+        logger.debug(`📋 Extracted sessionId from request: ${currentSessionId.substring(0, 8)}...`)
+      }
+    }
 
     // 🔄 创建排除账户的Set以便快速查找
     const excludedSet = new Set(excludedAccounts)
@@ -531,6 +543,34 @@ class UnifiedClaudeScheduler {
           }
         }
 
+        // 📋 检查 sessionId 限制（如果启用）
+        if (
+          currentSessionId &&
+          (account.sessionIdLimitEnabled === 'true' || account.sessionIdLimitEnabled === true)
+        ) {
+          const maxCount = parseInt(account.sessionIdMaxCount) || 0
+          const windowMinutes = parseInt(account.sessionIdWindowMinutes) || 0
+
+          if (maxCount > 0 && windowMinutes > 0) {
+            const sessionIds = await redis.getAccountSessionIds(account.id, windowMinutes)
+            const currentCount = sessionIds.length
+            const sessionIdList = sessionIds.map((s) => s.sessionId)
+            const isCurrentSessionInList = sessionIdList.includes(currentSessionId)
+
+            // 如果列表已满且当前 sessionId 不在列表中，则排除该账户
+            if (currentCount >= maxCount && !isCurrentSessionInList) {
+              logger.info(
+                `🚫 Official account ${account.name} reached sessionId limit: ${currentCount}/${maxCount} (current session not in list, window: ${windowMinutes}min)`
+              )
+              continue
+            }
+
+            logger.debug(
+              `✅ Official account ${account.name} passed sessionId check: ${currentCount}/${maxCount} (current session ${isCurrentSessionInList ? 'in' : 'not in'} list)`
+            )
+          }
+        }
+
         availableAccounts.push({
           ...account,
           accountId: account.id,
@@ -551,6 +591,8 @@ class UnifiedClaudeScheduler {
 
     // 🚀 收集需要并发检查的账户ID列表（批量查询优化）
     const accountsNeedingConcurrencyCheck = []
+    // 📋 收集需要 sessionId 限制检查的账户列表
+    const accountsNeedingSessionIdCheck = []
 
     for (const account of consoleAccounts) {
       // 🔄 检查是否在排除列表中
@@ -599,14 +641,33 @@ class UnifiedClaudeScheduler {
         const isRateLimited = await claudeConsoleAccountService.isAccountRateLimited(account.id)
         const isQuotaExceeded = await claudeConsoleAccountService.isAccountQuotaExceeded(account.id)
 
-        // 🔢 记录符合基本条件的账户（通过了前面所有检查，但可能因并发被排除）
+        // 🔢 记录符合基本条件的账户（通过了前面所有检查，但可能因并发或 sessionId 限制被排除）
         if (!isRateLimited && !isQuotaExceeded) {
           consoleAccountsEligibleCount++
+
+          // 📋 检查是否需要 sessionId 限制检查
+          const needsSessionIdCheck =
+            currentSessionId &&
+            (account.sessionIdLimitEnabled === 'true' || account.sessionIdLimitEnabled === true) &&
+            parseInt(account.sessionIdMaxCount) > 0 &&
+            parseInt(account.sessionIdWindowMinutes) > 0
+
           // 🚀 将符合条件且需要并发检查的账户加入批量查询列表
-          if (account.maxConcurrentTasks > 0) {
-            accountsNeedingConcurrencyCheck.push(account)
+          if (account.maxConcurrentTasks > 0 || needsSessionIdCheck) {
+            // 标记账户需要哪些检查
+            const checkInfo = {
+              account,
+              needsConcurrencyCheck: account.maxConcurrentTasks > 0,
+              needsSessionIdCheck
+            }
+
+            if (needsSessionIdCheck) {
+              accountsNeedingSessionIdCheck.push(checkInfo)
+            } else {
+              accountsNeedingConcurrencyCheck.push(account)
+            }
           } else {
-            // 未配置并发限制的账户直接加入可用池
+            // 未配置任何限制的账户直接加入可用池
             availableAccounts.push({
               ...account,
               accountId: account.id,
@@ -615,7 +676,7 @@ class UnifiedClaudeScheduler {
               lastUsedAt: account.lastUsedAt || '0'
             })
             logger.info(
-              `✅ Added Claude Console account to available pool: ${account.name} (priority: ${account.priority}, no concurrency limit)`
+              `✅ Added Claude Console account to available pool: ${account.name} (priority: ${account.priority}, no limits)`
             )
           }
         } else {
@@ -630,6 +691,65 @@ class UnifiedClaudeScheduler {
         logger.info(
           `❌ Claude Console account ${account.name} not eligible - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
+      }
+    }
+
+    // 📋 批量查询所有账户的 sessionId 数量（Promise.all 并行执行）
+    if (accountsNeedingSessionIdCheck.length > 0) {
+      logger.debug(
+        `📋 Batch checking sessionId limits for ${accountsNeedingSessionIdCheck.length} accounts`
+      )
+
+      const sessionIdCheckPromises = accountsNeedingSessionIdCheck.map((checkInfo) => {
+        const { account } = checkInfo
+        const windowMinutes = parseInt(account.sessionIdWindowMinutes)
+
+        return redis.getAccountSessionIds(account.id, windowMinutes).then((sessionIds) => ({
+          checkInfo,
+          sessionIds
+        }))
+      })
+
+      const sessionIdResults = await Promise.all(sessionIdCheckPromises)
+
+      // 处理批量查询结果
+      for (const { checkInfo, sessionIds } of sessionIdResults) {
+        const { account, needsConcurrencyCheck } = checkInfo
+        const maxCount = parseInt(account.sessionIdMaxCount)
+        const currentCount = sessionIds.length
+        const sessionIdList = sessionIds.map((s) => s.sessionId)
+
+        // 检查当前 sessionId 是否已在列表中
+        const isCurrentSessionInList = sessionIdList.includes(currentSessionId)
+
+        // 如果列表已满且当前 sessionId 不在列表中，则排除该账户
+        if (currentCount >= maxCount && !isCurrentSessionInList) {
+          logger.info(
+            `🚫 Console account ${account.name} reached sessionId limit: ${currentCount}/${maxCount} (current session not in list, window: ${account.sessionIdWindowMinutes}min)`
+          )
+          continue // 跳过该账户
+        }
+
+        // 通过 sessionId 限制检查
+        logger.debug(
+          `✅ Console account ${account.name} passed sessionId check: ${currentCount}/${maxCount} (current session ${isCurrentSessionInList ? 'in' : 'not in'} list)`
+        )
+
+        // 如果还需要并发检查，加入并发检查列表；否则直接加入可用池
+        if (needsConcurrencyCheck) {
+          accountsNeedingConcurrencyCheck.push(account)
+        } else {
+          availableAccounts.push({
+            ...account,
+            accountId: account.id,
+            accountType: 'claude-console',
+            priority: parseInt(account.priority) || 50,
+            lastUsedAt: account.lastUsedAt || '0'
+          })
+          logger.info(
+            `✅ Added Console account to available pool: ${account.name} (priority: ${account.priority}, sessionId: ${currentCount}/${maxCount})`
+          )
+        }
       }
     }
 

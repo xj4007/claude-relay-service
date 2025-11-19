@@ -144,9 +144,7 @@ async function testAnyrouterHeibaiResponse() {
         const hasCacheRead = (messageStartUsage.cache_read_input_tokens || 0) > 0
 
         if (hasCacheCreation && hasCacheRead) {
-          logger.error(
-            '❌ PROBLEM DETECTED: First request has BOTH cache_creation AND cache_read!'
-          )
+          logger.error('❌ PROBLEM DETECTED: First request has BOTH cache_creation AND cache_read!')
           logger.error(
             '   This is incorrect - first request should only have cache_creation, not cache_read.'
           )

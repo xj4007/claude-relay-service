@@ -69,7 +69,11 @@ class ClaudeConsoleAccountService {
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
       useUnifiedClientId = false, // 是否使用统一的客户端标识
       unifiedClientId = '', // 统一的客户端标识
-      maxConcurrentTasks = 0 // 最大并发任务数，0表示无限制
+      maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
+      // 📋 SessionId 限制相关字段
+      sessionIdLimitEnabled = false, // 是否启用 sessionId 限制
+      sessionIdMaxCount = 0, // 最大 sessionId 数量，0表示不限制
+      sessionIdWindowMinutes = 0 // 时间窗口（分钟），0表示不限制
     } = options
 
     // 验证必填字段
@@ -120,7 +124,11 @@ class ClaudeConsoleAccountService {
       // 统一客户端标识相关
       useUnifiedClientId: useUnifiedClientId.toString(), // 是否使用统一的客户端标识
       unifiedClientId: unifiedClientId || '', // 统一的客户端标识
-      maxConcurrentTasks: maxConcurrentTasks.toString() // 最大并发任务数，0表示无限制
+      maxConcurrentTasks: maxConcurrentTasks.toString(), // 最大并发任务数，0表示无限制
+      // 📋 SessionId 限制相关
+      sessionIdLimitEnabled: sessionIdLimitEnabled.toString(), // 是否启用 sessionId 限制
+      sessionIdMaxCount: sessionIdMaxCount.toString(), // 最大 sessionId 数量
+      sessionIdWindowMinutes: sessionIdWindowMinutes.toString() // 时间窗口（分钟）
     }
 
     const client = redis.getClientSafe()
@@ -231,7 +239,12 @@ class ClaudeConsoleAccountService {
 
             // 并发控制相关
             maxConcurrentTasks: parseInt(accountData.maxConcurrentTasks) || 0,
-            activeTaskCount
+            activeTaskCount,
+
+            // 📋 SessionId 限制相关
+            sessionIdLimitEnabled: accountData.sessionIdLimitEnabled === 'true',
+            sessionIdMaxCount: parseInt(accountData.sessionIdMaxCount) || 0,
+            sessionIdWindowMinutes: parseInt(accountData.sessionIdWindowMinutes) || 0
           })
         }
       }
@@ -394,6 +407,17 @@ class ClaudeConsoleAccountService {
       }
       if (updates.maxConcurrentTasks !== undefined) {
         updatedData.maxConcurrentTasks = updates.maxConcurrentTasks.toString()
+      }
+
+      // 📋 SessionId 限制相关字段
+      if (updates.sessionIdLimitEnabled !== undefined) {
+        updatedData.sessionIdLimitEnabled = updates.sessionIdLimitEnabled.toString()
+      }
+      if (updates.sessionIdMaxCount !== undefined) {
+        updatedData.sessionIdMaxCount = updates.sessionIdMaxCount.toString()
+      }
+      if (updates.sessionIdWindowMinutes !== undefined) {
+        updatedData.sessionIdWindowMinutes = updates.sessionIdWindowMinutes.toString()
       }
 
       // ✅ 直接保存 subscriptionExpiresAt（如果提供）

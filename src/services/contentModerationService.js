@@ -546,7 +546,7 @@ When in doubt → ALLOW (better false negative than false positive).`
       return ''
     }
 
-    const messages = requestBody.messages
+    const { messages } = requestBody
     const parts = []
     let foundLastUser = false
     let foundAssistant = false
@@ -786,7 +786,7 @@ When in doubt → ALLOW (better false negative than false positive).`
     // 外层循环：遍历所有API Key
     while (keysAttempted < totalKeys) {
       const currentKey = this._getNextApiKey()
-      const currentKeyIndex = this.currentKeyIndex
+      const { currentKeyIndex } = this
       let lastError = null
 
       logger.info(

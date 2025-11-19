@@ -1158,8 +1158,8 @@ class ApiKeyService {
   ) {
     try {
       // 提取 token 数量
-      let inputTokens = usageObject.input_tokens || 0
-      let outputTokens = usageObject.output_tokens || 0
+      const inputTokens = usageObject.input_tokens || 0
+      const outputTokens = usageObject.output_tokens || 0
       let cacheCreateTokens = usageObject.cache_creation_input_tokens || 0
       let cacheReadTokens = usageObject.cache_read_input_tokens || 0
 

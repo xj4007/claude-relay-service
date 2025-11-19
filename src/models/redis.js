@@ -1977,6 +1977,127 @@ class RedisClient {
     }
   }
 
+  // 📋 账户级别 SessionId 限制追踪
+  // 添加 sessionId 到账户追踪列表（使用 Sorted Set 存储，按时间戳排序）
+  async addAccountSessionId(accountId, sessionId, windowMinutes) {
+    try {
+      if (!accountId || !sessionId || !windowMinutes) {
+        logger.warn('⚠️ Missing required parameters for addAccountSessionId')
+        return
+      }
+
+      const key = `account_session_ids:${accountId}`
+      const now = Date.now()
+      const windowMs = windowMinutes * 60 * 1000
+      const windowStart = now - windowMs
+      const client = this.getClientSafe()
+
+      // 使用 Lua 脚本确保原子操作
+      const luaScript = `
+        local key = KEYS[1]
+        local sessionId = ARGV[1]
+        local now = tonumber(ARGV[2])
+        local windowStart = tonumber(ARGV[3])
+        local ttl = tonumber(ARGV[4])
+
+        -- 添加当前 sessionId（分数为时间戳）
+        redis.call('ZADD', key, now, sessionId)
+
+        -- 清理窗口外的过期记录
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', windowStart)
+
+        -- 设置键过期时间（2倍窗口时间，防止内存泄漏）
+        redis.call('EXPIRE', key, ttl)
+
+        -- 返回当前有效 sessionId 数量
+        return redis.call('ZCARD', key)
+      `
+
+      const ttlSeconds = Math.ceil((windowMs * 2) / 1000)
+      const count = await client.eval(luaScript, 1, key, sessionId, now, windowStart, ttlSeconds)
+
+      logger.database(
+        `📋 Added sessionId ${sessionId.substring(0, 8)}... to account ${accountId} (count: ${count}, window: ${windowMinutes}min)`
+      )
+
+      return parseInt(count || 0)
+    } catch (error) {
+      logger.error('❌ Failed to add account sessionId:', error)
+      // 不抛出错误，避免影响正常请求流程
+      return 0
+    }
+  }
+
+  // 获取账户当前有效 sessionId 数量
+  async getAccountSessionIdCount(accountId, windowMinutes) {
+    try {
+      if (!accountId || !windowMinutes) {
+        return 0
+      }
+
+      const key = `account_session_ids:${accountId}`
+      const now = Date.now()
+      const windowMs = windowMinutes * 60 * 1000
+      const windowStart = now - windowMs
+      const client = this.getClientSafe()
+
+      // 使用 Lua 脚本确保原子操作
+      const luaScript = `
+        local key = KEYS[1]
+        local windowStart = tonumber(ARGV[1])
+
+        -- 清理窗口外的过期记录
+        redis.call('ZREMRANGEBYSCORE', key, '-inf', windowStart)
+
+        -- 返回当前有效 sessionId 数量
+        return redis.call('ZCARD', key)
+      `
+
+      const count = await client.eval(luaScript, 1, key, windowStart)
+      return parseInt(count || 0)
+    } catch (error) {
+      logger.error('❌ Failed to get account sessionId count:', error)
+      return 0
+    }
+  }
+
+  // 获取账户当前所有有效 sessionId（用于调试和监控）
+  async getAccountSessionIds(accountId, windowMinutes) {
+    try {
+      if (!accountId || !windowMinutes) {
+        return []
+      }
+
+      const key = `account_session_ids:${accountId}`
+      const now = Date.now()
+      const windowMs = windowMinutes * 60 * 1000
+      const windowStart = now - windowMs
+      const client = this.getClientSafe()
+
+      // 获取窗口内的所有 sessionId（带时间戳）
+      const members = await client.zrangebyscore(key, windowStart, '+inf', 'WITHSCORES')
+      const sessionIds = []
+
+      for (let i = 0; i < members.length; i += 2) {
+        const sessionId = members[i]
+        const timestamp = parseInt(members[i + 1])
+
+        sessionIds.push({
+          sessionId,
+          timestamp,
+          addedAt: new Date(timestamp).toISOString(),
+          ageMs: now - timestamp,
+          ageMinutes: Math.floor((now - timestamp) / 60000)
+        })
+      }
+
+      return sessionIds
+    } catch (error) {
+      logger.error('❌ Failed to get account sessionIds:', error)
+      return []
+    }
+  }
+
   // 🔧 Basic Redis operations wrapper methods for convenience
   async get(key) {
     const client = this.getClientSafe()

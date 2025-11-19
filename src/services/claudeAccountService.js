@@ -75,7 +75,11 @@ class ClaudeAccountService {
       useUnifiedClientId = false, // 是否使用统一的客户端标识
       unifiedClientId = '', // 统一的客户端标识
       expiresAt = null, // 账户订阅到期时间
-      extInfo = null // 额外扩展信息
+      extInfo = null, // 额外扩展信息
+      // 📋 SessionId 限制相关字段
+      sessionIdLimitEnabled = false, // 是否启用 sessionId 限制
+      sessionIdMaxCount = 0, // 最大 sessionId 数量，0表示不限制
+      sessionIdWindowMinutes = 0 // 时间窗口（分钟），0表示不限制
     } = options
 
     const accountId = uuidv4()
@@ -120,7 +124,11 @@ class ClaudeAccountService {
         // 账户订阅到期时间
         subscriptionExpiresAt: expiresAt || '',
         // 扩展信息
-        extInfo: normalizedExtInfo ? JSON.stringify(normalizedExtInfo) : ''
+        extInfo: normalizedExtInfo ? JSON.stringify(normalizedExtInfo) : '',
+        // 📋 SessionId 限制相关
+        sessionIdLimitEnabled: sessionIdLimitEnabled.toString(),
+        sessionIdMaxCount: sessionIdMaxCount.toString(),
+        sessionIdWindowMinutes: sessionIdWindowMinutes.toString()
       }
     } else {
       // 兼容旧格式
@@ -152,7 +160,11 @@ class ClaudeAccountService {
         // 账户订阅到期时间
         subscriptionExpiresAt: expiresAt || '',
         // 扩展信息
-        extInfo: normalizedExtInfo ? JSON.stringify(normalizedExtInfo) : ''
+        extInfo: normalizedExtInfo ? JSON.stringify(normalizedExtInfo) : '',
+        // 📋 SessionId 限制相关
+        sessionIdLimitEnabled: sessionIdLimitEnabled.toString(),
+        sessionIdMaxCount: sessionIdMaxCount.toString(),
+        sessionIdWindowMinutes: sessionIdWindowMinutes.toString()
       }
     }
 
@@ -558,7 +570,11 @@ class ClaudeAccountService {
             // 添加停止原因
             stoppedReason: account.stoppedReason || null,
             // 扩展信息
-            extInfo: parsedExtInfo
+            extInfo: parsedExtInfo,
+            // 📋 SessionId 限制相关
+            sessionIdLimitEnabled: account.sessionIdLimitEnabled === 'true',
+            sessionIdMaxCount: parseInt(account.sessionIdMaxCount) || 0,
+            sessionIdWindowMinutes: parseInt(account.sessionIdWindowMinutes) || 0
           }
         })
       )
@@ -650,7 +666,10 @@ class ClaudeAccountService {
         'useUnifiedClientId',
         'unifiedClientId',
         'subscriptionExpiresAt',
-        'extInfo'
+        'extInfo',
+        'sessionIdLimitEnabled',
+        'sessionIdMaxCount',
+        'sessionIdWindowMinutes'
       ]
       const updatedData = { ...accountData }
       let shouldClearAutoStopFields = false

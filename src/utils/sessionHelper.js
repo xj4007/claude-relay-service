@@ -18,7 +18,9 @@ class SessionHelper {
 
     // 🔒 如果没有提供 apiKeyId，记录警告但继续（向后兼容，但不推荐）
     if (!apiKeyId) {
-      logger.warn(`⚠️ Session hash generation without apiKeyId - this may cause session sharing between users!`)
+      logger.warn(
+        `⚠️ Session hash generation without apiKeyId - this may cause session sharing between users!`
+      )
     }
 
     // 1. 最高优先级：使用metadata中的session ID（加上 apiKeyId 前缀）
@@ -32,8 +34,14 @@ class SessionHelper {
         const isolatedSessionId = apiKeyId ? `${apiKeyId}_${sessionId}` : sessionId
         // 如果拼接后超过32字符，对整个字符串hash
         if (isolatedSessionId.length > 32) {
-          const hash = crypto.createHash('sha256').update(isolatedSessionId).digest('hex').substring(0, 32)
-          logger.debug(`📋 Session ID extracted from metadata.user_id (hashed with apiKeyId): ${hash}`)
+          const hash = crypto
+            .createHash('sha256')
+            .update(isolatedSessionId)
+            .digest('hex')
+            .substring(0, 32)
+          logger.debug(
+            `📋 Session ID extracted from metadata.user_id (hashed with apiKeyId): ${hash}`
+          )
           return hash
         }
         logger.debug(`📋 Session ID extracted from metadata.user_id: ${isolatedSessionId}`)

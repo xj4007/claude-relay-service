@@ -1130,18 +1130,19 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
       tokenInfoConfig.proxy = false
     }
 
-  // 如果有代理配置，使用 strict 模式创建代理
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      tokenInfoConfig.httpAgent = proxyAgent
-      tokenInfoConfig.httpsAgent = proxyAgent
-      tokenInfoConfig.proxy = false
-    } catch (error) {
-      logger.error('Failed to create proxy agent for tokeninfo:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
+    // 如果有代理配置，使用 strict 模式创建代理
+    if (proxyConfig) {
+      try {
+        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+        tokenInfoConfig.httpAgent = proxyAgent
+        tokenInfoConfig.httpsAgent = proxyAgent
+        tokenInfoConfig.proxy = false
+      } catch (error) {
+        logger.error('Failed to create proxy agent for tokeninfo:', error)
+        throw new Error(`Proxy configuration error: ${error.message}`)
+      }
     }
-  }
+
     try {
       await axios(tokenInfoConfig)
       logger.info('📋 tokeninfo 接口验证成功')
@@ -1165,24 +1166,25 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
       userInfoConfig.proxy = false
     }
 
-  // 如果有代理配置，使用 strict 模式创建代理
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      userInfoConfig.httpAgent = proxyAgent
-      userInfoConfig.httpsAgent = proxyAgent
-      userInfoConfig.proxy = false
-    } catch (error) {
-      logger.error('Failed to create proxy agent for userinfo:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
+    // 如果有代理配置，使用 strict 模式创建代理
+    if (proxyConfig) {
+      try {
+        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+        userInfoConfig.httpAgent = proxyAgent
+        userInfoConfig.httpsAgent = proxyAgent
+        userInfoConfig.proxy = false
+      } catch (error) {
+        logger.error('Failed to create proxy agent for userinfo:', error)
+        throw new Error(`Proxy configuration error: ${error.message}`)
+      }
     }
-  }
 
-  try {
-    await axios(userInfoConfig)
-    logger.info('📋 userinfo 接口获取成功')
-  } catch (error) {
-    logger.warn('⚠️ userinfo 接口调用失败:', error.message)
+    try {
+      await axios(userInfoConfig)
+      logger.info('📋 userinfo 接口获取成功')
+    } catch (error) {
+      logger.warn('⚠️ userinfo 接口调用失败:', error.message)
+    }
   }
 
   // 创建ClientMetadata

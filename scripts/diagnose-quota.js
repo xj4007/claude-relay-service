@@ -22,7 +22,7 @@ async function diagnoseQuota(keyId) {
       process.exit(1)
     }
 
-    console.log('\n' + '='.repeat(60))
+    console.log(`\n${'='.repeat(60)}`)
     console.log(`📊 API Key: ${keyData.name} (${keyId})`)
     console.log('='.repeat(60))
 
@@ -64,7 +64,9 @@ async function diagnoseQuota(keyId) {
       console.log(`\n🕐 ${logDate.toISOString()}`)
       console.log(`   Model: ${log.model}`)
       console.log(`   Cost: $${(log.cost || 0).toFixed(4)}`)
-      console.log(`   Remaining Quota (logged): $${logRemainingQuota !== null && logRemainingQuota !== undefined ? logRemainingQuota.toFixed(4) : 'N/A'}`)
+      console.log(
+        `   Remaining Quota (logged): $${logRemainingQuota !== null && logRemainingQuota !== undefined ? logRemainingQuota.toFixed(4) : 'N/A'}`
+      )
 
       // 检查是否一致
       if (i === 0) {
@@ -79,7 +81,7 @@ async function diagnoseQuota(keyId) {
       }
     }
 
-    console.log('\n' + '='.repeat(60))
+    console.log(`\n${'='.repeat(60)}`)
     console.log('📊 Summary:')
     console.log('='.repeat(60))
     console.log(`Total Cost Limit: $${totalCostLimit.toFixed(2)}`)
@@ -102,7 +104,9 @@ const keyId = keyIdIndex !== -1 ? args[keyIdIndex + 1] : null
 
 if (!keyId) {
   console.error('❌ Usage: node scripts/diagnose-quota.js --key-id <API_KEY_ID>')
-  console.error('   Example: node scripts/diagnose-quota.js --key-id 425a5307-9bc8-4b25-b4b1-39ebaed2c9b8')
+  console.error(
+    '   Example: node scripts/diagnose-quota.js --key-id 425a5307-9bc8-4b25-b4b1-39ebaed2c9b8'
+  )
   process.exit(1)
 }
 

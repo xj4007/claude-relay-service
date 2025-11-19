@@ -1483,6 +1483,67 @@
               <input v-model.number="form.rateLimitDuration" type="hidden" value="60" />
             </div>
 
+            <!-- SessionId 限制配置（Claude 官方和 Console 账户） -->
+            <div
+              v-if="(form.platform === 'claude' || form.platform === 'claude-console') && !isEdit"
+              class="space-y-4"
+            >
+              <div class="flex items-center gap-2">
+                <input
+                  id="sessionIdLimitEnabled-create"
+                  v-model="form.sessionIdLimitEnabled"
+                  class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                  type="checkbox"
+                />
+                <label
+                  class="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300"
+                  for="sessionIdLimitEnabled-create"
+                >
+                  启用 SessionId 限制
+                  <span
+                    class="cursor-help text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    title="限制单个账户在时间窗口内最多服务的不同 sessionId 数量，防止账户被过多不同客户端会话占用"
+                  >
+                    <i class="fas fa-question-circle"></i>
+                  </span>
+                </label>
+              </div>
+
+              <div v-if="form.sessionIdLimitEnabled" class="ml-6 space-y-3">
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    时间窗口（分钟）
+                  </label>
+                  <input
+                    v-model.number="form.sessionIdWindowMinutes"
+                    class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    min="1"
+                    placeholder="例如：5"
+                    type="number"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    统计窗口时长，建议 5-60 分钟
+                  </p>
+                </div>
+
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    最大 SessionId 数量
+                  </label>
+                  <input
+                    v-model.number="form.sessionIdMaxCount"
+                    class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    min="1"
+                    placeholder="例如：3"
+                    type="number"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    窗口内最多服务的不同 sessionId 数量，建议 3-10
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <!-- Claude 订阅类型选择 -->
             <div v-if="form.platform === 'claude'">
               <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
@@ -2551,6 +2612,67 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               限制此账户同时处理的最大请求数，0 或留空表示无限制。推荐设置：3-5
             </p>
+          </div>
+
+          <!-- SessionId 限制配置（编辑模式，Claude 官方和 Console 账户） -->
+          <div
+            v-if="form.platform === 'claude' || form.platform === 'claude-console'"
+            class="space-y-4"
+          >
+            <div class="flex items-center gap-2">
+              <input
+                id="sessionIdLimitEnabled"
+                v-model="form.sessionIdLimitEnabled"
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:ring-offset-gray-800"
+                type="checkbox"
+              />
+              <label
+                class="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300"
+                for="sessionIdLimitEnabled"
+              >
+                启用 SessionId 限制
+                <span
+                  class="cursor-help text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  title="限制单个账户在时间窗口内最多服务的不同 sessionId 数量，防止账户被过多不同客户端会话占用"
+                >
+                  <i class="fas fa-question-circle"></i>
+                </span>
+              </label>
+            </div>
+
+            <div v-if="form.sessionIdLimitEnabled" class="ml-6 space-y-3">
+              <div>
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  时间窗口（分钟）
+                </label>
+                <input
+                  v-model.number="form.sessionIdWindowMinutes"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                  min="1"
+                  placeholder="例如：5"
+                  type="number"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  统计窗口时长，建议 5-60 分钟
+                </p>
+              </div>
+
+              <div>
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  最大 SessionId 数量
+                </label>
+                <input
+                  v-model.number="form.sessionIdMaxCount"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                  min="1"
+                  placeholder="例如：3"
+                  type="number"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  窗口内最多服务的不同 sessionId 数量，建议 3-10
+                </p>
+              </div>
+            </div>
           </div>
 
           <!-- Claude Console 和 CCR 特定字段（编辑模式）-->
@@ -3687,6 +3809,10 @@ const form = ref({
   quotaResetTime: props.account?.quotaResetTime || '00:00',
   // 账户并发限制字段
   maxConcurrentTasks: props.account?.maxConcurrentTasks || 0,
+  // SessionId 限制相关字段
+  sessionIdLimitEnabled: props.account?.sessionIdLimitEnabled || false,
+  sessionIdMaxCount: props.account?.sessionIdMaxCount || 0,
+  sessionIdWindowMinutes: props.account?.sessionIdWindowMinutes || 0,
   // Bedrock 特定字段
   accessKeyId: props.account?.accessKeyId || '',
   secretAccessKey: props.account?.secretAccessKey || '',
@@ -4588,6 +4714,10 @@ const createAccount = async () => {
       data.unifiedClientId = form.value.unifiedClientId || ''
       // 并发控制字段
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      // SessionId 限制字段
+      data.sessionIdLimitEnabled = form.value.sessionIdLimitEnabled || false
+      data.sessionIdMaxCount = form.value.sessionIdMaxCount || 0
+      data.sessionIdWindowMinutes = form.value.sessionIdWindowMinutes || 0
     } else if (form.value.platform === 'openai-responses') {
       // OpenAI-Responses 账户特定数据
       data.baseApi = form.value.baseApi
@@ -4897,6 +5027,10 @@ const updateAccount = async () => {
       data.unifiedClientId = form.value.unifiedClientId || ''
       // 并发控制字段
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      // SessionId 限制字段
+      data.sessionIdLimitEnabled = form.value.sessionIdLimitEnabled || false
+      data.sessionIdMaxCount = form.value.sessionIdMaxCount || 0
+      data.sessionIdWindowMinutes = form.value.sessionIdWindowMinutes || 0
     }
 
     // OpenAI-Responses 特定更新
@@ -5489,7 +5623,11 @@ watch(
         dailyUsage: newAccount.dailyUsage || 0,
         quotaResetTime: newAccount.quotaResetTime || '00:00',
         // 并发控制字段
-        maxConcurrentTasks: newAccount.maxConcurrentTasks || 0
+        maxConcurrentTasks: newAccount.maxConcurrentTasks || 0,
+        // SessionId 限制字段
+        sessionIdLimitEnabled: newAccount.sessionIdLimitEnabled || false,
+        sessionIdMaxCount: newAccount.sessionIdMaxCount || 0,
+        sessionIdWindowMinutes: newAccount.sessionIdWindowMinutes || 0
       }
 
       // 如果是Claude Console账户，加载实时使用情况
