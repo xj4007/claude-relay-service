@@ -1,0 +1,46 @@
+{
+	"pages": [
+		{
+			"path": "pages/index/index",
+			"style": {
+				"navigationBarTitleText": "Little Hood Assistant"
+			}
+		},
+		{
+			"path": "pages/key-manage/index",
+			"style": {
+				"navigationBarTitleText": "Key Management"
+			}
+		},
+		{
+			"path": "pages/checkin/index",
+			"style": {
+				"navigationBarTitleText": "Daily Check-in"
+			}
+		},
+		{
+			"path": "pages/balance/index",
+			"style": {
+				"navigationBarTitleText": "Balance"
+			}
+		},
+		{
+			"path": "pages/consumption-logs/index",
+			"style": {
+				"navigationBarTitleText": "Consumption Logs"
+			}
+		},
+		{
+			"path": "pages/recharge/index",
+			"style": {
+				"navigationBarTitleText": "Recharge"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "Little Hood Assistant",
+		"navigationBarBackgroundColor": "#ffffff",
+		"backgroundColor": "#ffffff"
+	}
+}
