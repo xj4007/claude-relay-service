@@ -1,6 +1,7 @@
 const redisClient = require('../models/redis')
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
+const https = require('https')
 const config = require('../../config/config')
 const logger = require('../utils/logger')
 const { OAuth2Client } = require('google-auth-library')
@@ -20,6 +21,18 @@ const LRUCache = require('../utils/lruCache')
 const OAUTH_CLIENT_ID = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com'
 const OAUTH_CLIENT_SECRET = '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'
 const OAUTH_SCOPES = ['https://www.googleapis.com/auth/cloud-platform']
+
+// 🌐 TCP Keep-Alive Agent 配置
+// 解决长时间流式请求中 NAT/防火墙空闲超时导致的连接中断问题
+const keepAliveAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000, // 每30秒发送一次 keep-alive 探测
+  timeout: 120000, // 120秒连接超时
+  maxSockets: 100, // 最大并发连接数
+  maxFreeSockets: 10 // 保持的空闲连接数
+})
+
+logger.info('🌐 Gemini HTTPS Agent initialized with TCP Keep-Alive support')
 
 // 加密相关常量
 const ALGORITHM = 'aes-256-cbc'
@@ -124,17 +137,14 @@ function createOAuth2Client(redirectUri = null, proxyConfig = null) {
 
   // 如果有代理配置，设置 transporterOptions
   if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
+    const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
+    if (proxyAgent) {
       // 通过 transporterOptions 传递代理配置给底层的 Gaxios
       clientOptions.transporterOptions = {
         agent: proxyAgent,
         httpsAgent: proxyAgent
       }
       logger.debug('Created OAuth2Client with proxy configuration')
-    } catch (error) {
-      logger.error('Failed to create proxy agent for OAuth2Client:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
     }
   }
 
@@ -1088,7 +1098,7 @@ async function forwardToCodeAssist(client, apiMethod, requestBody, proxyConfig =
 
   // 添加代理配置
   if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
+    // 只设置 httpsAgent，因为目标 URL 是 HTTPS (cloudcode-pa.googleapis.com)
     axiosConfig.httpsAgent = proxyAgent
     axiosConfig.proxy = false
     logger.info(`🌐 Using proxy for ${apiMethod}: ${ProxyHelper.getProxyDescription(proxyConfig)}`)
@@ -1130,19 +1140,6 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
       tokenInfoConfig.proxy = false
     }
 
-    // 如果有代理配置，使用 strict 模式创建代理
-    if (proxyConfig) {
-      try {
-        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-        tokenInfoConfig.httpAgent = proxyAgent
-        tokenInfoConfig.httpsAgent = proxyAgent
-        tokenInfoConfig.proxy = false
-      } catch (error) {
-        logger.error('Failed to create proxy agent for tokeninfo:', error)
-        throw new Error(`Proxy configuration error: ${error.message}`)
-      }
-    }
-
     try {
       await axios(tokenInfoConfig)
       logger.info('📋 tokeninfo 接口验证成功')
@@ -1164,19 +1161,6 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
       userInfoConfig.httpAgent = proxyAgent
       userInfoConfig.httpsAgent = proxyAgent
       userInfoConfig.proxy = false
-    }
-
-    // 如果有代理配置，使用 strict 模式创建代理
-    if (proxyConfig) {
-      try {
-        const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-        userInfoConfig.httpAgent = proxyAgent
-        userInfoConfig.httpsAgent = proxyAgent
-        userInfoConfig.proxy = false
-      } catch (error) {
-        logger.error('Failed to create proxy agent for userinfo:', error)
-        throw new Error(`Proxy configuration error: ${error.message}`)
-      }
     }
 
     try {
@@ -1220,19 +1204,13 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
   }
 
   // 添加代理配置
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      axiosConfig.httpAgent = proxyAgent
-      axiosConfig.httpsAgent = proxyAgent
-      axiosConfig.proxy = false
-      logger.info(
-        `🌐 Using proxy for Gemini loadCodeAssist: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-      )
-    } catch (error) {
-      logger.error('Failed to create proxy agent for loadCodeAssist:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
-    }
+  if (proxyAgent) {
+    // 只设置 httpsAgent，因为目标 URL 是 HTTPS (cloudcode-pa.googleapis.com)
+    axiosConfig.httpsAgent = proxyAgent
+    axiosConfig.proxy = false
+    logger.info(
+      `🌐 Using proxy for Gemini loadCodeAssist: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+    )
   } else {
     logger.debug('🌐 No proxy configured for Gemini loadCodeAssist')
   }
@@ -1301,19 +1279,14 @@ async function onboardUser(client, tierId, projectId, clientMetadata, proxyConfi
   }
 
   // 添加代理配置
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      baseAxiosConfig.httpAgent = proxyAgent
-      baseAxiosConfig.httpsAgent = proxyAgent
-      baseAxiosConfig.proxy = false
-      logger.info(
-        `🌐 Using proxy for Gemini onboardUser: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-      )
-    } catch (error) {
-      logger.error('Failed to create proxy agent for onboardUser:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
-    }
+  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
+  if (proxyAgent) {
+    baseAxiosConfig.httpAgent = proxyAgent
+    baseAxiosConfig.httpsAgent = proxyAgent
+    baseAxiosConfig.proxy = false
+    logger.info(
+      `🌐 Using proxy for Gemini onboardUser: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+    )
   } else {
     logger.debug('🌐 No proxy configured for Gemini onboardUser')
   }
@@ -1439,19 +1412,14 @@ async function countTokens(client, contents, model = 'gemini-2.0-flash-exp', pro
   }
 
   // 添加代理配置
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      axiosConfig.httpAgent = proxyAgent
-      axiosConfig.httpsAgent = proxyAgent
-      axiosConfig.proxy = false
-      logger.info(
-        `🌐 Using proxy for Gemini countTokens: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-      )
-    } catch (error) {
-      logger.error('Failed to create proxy agent for countTokens:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
-    }
+  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
+  if (proxyAgent) {
+    // 只设置 httpsAgent，因为目标 URL 是 HTTPS (cloudcode-pa.googleapis.com)
+    axiosConfig.httpsAgent = proxyAgent
+    axiosConfig.proxy = false
+    logger.info(
+      `🌐 Using proxy for Gemini countTokens: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+    )
   } else {
     logger.debug('🌐 No proxy configured for Gemini countTokens')
   }
@@ -1517,25 +1485,22 @@ async function generateContent(
       'Content-Type': 'application/json'
     },
     data: request,
-    timeout: 60000 // 生成内容可能需要更长时间
+    timeout: 600000 // 生成内容可能需要更长时间
   }
 
   // 添加代理配置
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      axiosConfig.httpAgent = proxyAgent
-      axiosConfig.httpsAgent = proxyAgent
-      axiosConfig.proxy = false
-      logger.info(
-        `🌐 Using proxy for Gemini generateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-      )
-    } catch (error) {
-      logger.error('Failed to create proxy agent for generateContent:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
-    }
+  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
+  if (proxyAgent) {
+    // 只设置 httpsAgent，因为目标 URL 是 HTTPS (cloudcode-pa.googleapis.com)
+    axiosConfig.httpsAgent = proxyAgent
+    axiosConfig.proxy = false
+    logger.info(
+      `🌐 Using proxy for Gemini generateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+    )
   } else {
-    logger.debug('🌐 No proxy configured for Gemini generateContent')
+    // 没有代理时，使用 keepAlive agent 防止长时间请求被中断
+    axiosConfig.httpsAgent = keepAliveAgent
+    logger.debug('🌐 Using keepAlive agent for Gemini generateContent')
   }
 
   const response = await axios(axiosConfig)
@@ -1598,25 +1563,23 @@ async function generateContentStream(
     },
     data: request,
     responseType: 'stream',
-    timeout: 60000
+    timeout: 0 // 流式请求不设置超时限制，由 keepAlive 和 AbortSignal 控制
   }
 
   // 添加代理配置
-  if (proxyConfig) {
-    try {
-      const proxyAgent = ProxyHelper.createProxyAgentStrict(proxyConfig)
-      axiosConfig.httpAgent = proxyAgent
-      axiosConfig.httpsAgent = proxyAgent
-      axiosConfig.proxy = false
-      logger.info(
-        `🌐 Using proxy for Gemini streamGenerateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
-      )
-    } catch (error) {
-      logger.error('Failed to create proxy agent for streamGenerateContent:', error)
-      throw new Error(`Proxy configuration error: ${error.message}`)
-    }
+  const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
+  if (proxyAgent) {
+    // 只设置 httpsAgent，因为目标 URL 是 HTTPS (cloudcode-pa.googleapis.com)
+    // 同时设置 httpAgent 和 httpsAgent 可能导致 axios/follow-redirects 选择错误的协议
+    axiosConfig.httpsAgent = proxyAgent
+    axiosConfig.proxy = false
+    logger.info(
+      `🌐 Using proxy for Gemini streamGenerateContent: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+    )
   } else {
-    logger.debug('🌐 No proxy configured for Gemini streamGenerateContent')
+    // 没有代理时，使用 keepAlive agent 防止长时间流式请求被中断
+    axiosConfig.httpsAgent = keepAliveAgent
+    logger.debug('🌐 Using keepAlive agent for Gemini streamGenerateContent')
   }
 
   // 如果提供了中止信号，添加到配置中
@@ -1653,6 +1616,50 @@ async function updateTempProjectId(accountId, tempProjectId) {
   }
 }
 
+// 重置账户状态（清除所有异常状态）
+async function resetAccountStatus(accountId) {
+  const account = await getAccount(accountId)
+  if (!account) {
+    throw new Error('Account not found')
+  }
+
+  const updates = {
+    // 根据是否有有效的 refreshToken 来设置 status
+    status: account.refreshToken ? 'active' : 'created',
+    // 恢复可调度状态
+    schedulable: 'true',
+    // 清除错误相关字段
+    errorMessage: '',
+    rateLimitedAt: '',
+    rateLimitStatus: ''
+  }
+
+  await updateAccount(accountId, updates)
+  logger.info(`✅ Reset all error status for Gemini account ${accountId}`)
+
+  // 发送 Webhook 通知
+  try {
+    const webhookNotifier = require('../utils/webhookNotifier')
+    await webhookNotifier.sendAccountAnomalyNotification({
+      accountId,
+      accountName: account.name || accountId,
+      platform: 'gemini',
+      status: 'recovered',
+      errorCode: 'STATUS_RESET',
+      reason: 'Account status manually reset',
+      timestamp: new Date().toISOString()
+    })
+    logger.info(`📢 Webhook notification sent for Gemini account ${account.name} status reset`)
+  } catch (webhookError) {
+    logger.error('Failed to send status reset webhook notification:', webhookError)
+  }
+
+  return {
+    success: true,
+    message: 'Account status reset successfully'
+  }
+}
+
 module.exports = {
   generateAuthUrl,
   pollAuthorizationStatus,
@@ -1683,6 +1690,7 @@ module.exports = {
   generateContent,
   generateContentStream,
   updateTempProjectId,
+  resetAccountStatus,
   OAUTH_CLIENT_ID,
   OAUTH_SCOPES
 }
