@@ -531,68 +531,11 @@ class ClaudeRelayService {
     // 深拷贝请求体
     let processedBody = JSON.parse(JSON.stringify(body))
 
-    // 判断是否是真实的 Claude Code 请求
-    const isRealClaudeCode = this.isRealClaudeCodeRequest(processedBody)
-
-    // 如果不是真实的 Claude Code 请求，使用增强器补充必需参数
-    if (!isRealClaudeCode) {
-      processedBody = claudeCodeRequestEnhancer.enhanceRequest(processedBody, {
-        includeTools: false // 暂时不包含完整的tools定义
-      })
-      logger.info('🔧 Enhanced request with Claude Code parameters')
-    }
-
     // 验证并限制max_tokens参数
     this._validateAndLimitMaxTokens(processedBody)
 
     // 移除cache_control中的ttl字段
     this._stripTtlFromCacheControl(processedBody)
-
-    // 如果不是真实的 Claude Code 请求，需要设置 Claude Code 系统提示词
-    if (!isRealClaudeCode) {
-      const claudeCodePrompt = {
-        type: 'text',
-        text: this.claudeCodeSystemPrompt
-        // ❌ 不添加 cache_control，保持简洁
-      }
-
-      if (processedBody.system) {
-        if (typeof processedBody.system === 'string') {
-          // 字符串格式：转换为数组，Claude Code 提示词在第一位
-          const userSystemPrompt = {
-            type: 'text',
-            text: processedBody.system
-          }
-          // 如果用户的提示词与 Claude Code 提示词相同，只保留一个
-          if (processedBody.system.trim() === this.claudeCodeSystemPrompt) {
-            processedBody.system = [claudeCodePrompt]
-          } else {
-            processedBody.system = [claudeCodePrompt, userSystemPrompt]
-          }
-        } else if (Array.isArray(processedBody.system)) {
-          // 检查第一个元素是否是 Claude Code 系统提示词
-          const firstItem = processedBody.system[0]
-          const isFirstItemClaudeCode =
-            firstItem && firstItem.type === 'text' && firstItem.text === this.claudeCodeSystemPrompt
-
-          if (!isFirstItemClaudeCode) {
-            // 如果第一个不是 Claude Code 提示词，需要在开头插入
-            // 同时检查数组中是否有其他位置包含 Claude Code 提示词，如果有则移除
-            const filteredSystem = processedBody.system.filter(
-              (item) => !(item && item.type === 'text' && item.text === this.claudeCodeSystemPrompt)
-            )
-            processedBody.system = [claudeCodePrompt, ...filteredSystem]
-          }
-        } else {
-          // 其他格式，记录警告但不抛出错误，尝试处理
-          logger.warn('⚠️ Unexpected system field type:', typeof processedBody.system)
-          processedBody.system = [claudeCodePrompt]
-        }
-      } else {
-        // 用户没有传递 system，需要添加 Claude Code 提示词
-        processedBody.system = [claudeCodePrompt]
-      }
-    }
 
     // 处理原有的系统提示（如果配置了）
     if (this.systemPrompt && this.systemPrompt.trim()) {

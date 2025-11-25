@@ -1697,14 +1697,11 @@ class ClaudeConsoleRelayService {
       return body
     }
 
-    // 使用���强器处理请求体
-    const enhancedBody = claudeCodeRequestEnhancer.enhanceRequest(body, {
-      includeTools: false // 暂时不包含完整的tools定义
-    })
+    // 特殊供应商不需要请求体增强，直接返回原始body
+    // 请求头增强由 claudeCodeHeadersService 统一处理
+    logger.info(`🏷️ Special vendor request body processing (no modification needed)`)
 
-    logger.info(`🏷️ Enhanced request body for special vendor using claudeCodeRequestEnhancer`)
-
-    return enhancedBody
+    return body
   }
 
   // 🔄 替换请求中的客户端标识
