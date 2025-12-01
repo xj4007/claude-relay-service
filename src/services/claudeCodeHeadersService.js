@@ -26,14 +26,14 @@ class ClaudeCodeHeadersService {
       anthropic-dangerous-direct-browser-access: true
       anthropic-version: 2023-06-01
       x-app: cli
-      User-Agent: claude-cli/2.0.49 (external, cli)
+      User-Agent: claude-cli/2.0.53 (external, cli)
       Authorization: Bearer cr_3b48564e8f6473490e7fe4dfe2e0fef770a59f55d3243dc76902c5211d90feb5
       content-type: application/json
       anthropic-beta: interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14
       x-stainless-helper-method: stream
       accept-language: *
       sec-fetch-mode: cors
-      accept-encoding: gzip, deflate
+      accept-encoding: br, gzip, deflate
     */
     this.unifiedHeaders = {
       connection: 'keep-alive',
@@ -45,13 +45,13 @@ class ClaudeCodeHeadersService {
       'x-stainless-os': 'Windows',
       'x-stainless-arch': 'x64',
       'x-stainless-runtime': 'node',
-      'x-stainless-runtime-version': 'v20.16.0',
+      'x-stainless-runtime-version': 'v20.19.1',
       'anthropic-dangerous-direct-browser-access': 'true',
       'x-app': 'cli',
-      'user-agent': 'claude-cli/2.0.49 (external, cli)',
+      'user-agent': 'claude-cli/2.0.53 (external, cli)',
       'accept-language': '*',
       'sec-fetch-mode': 'cors',
-      'accept-encoding': 'gzip, deflate',
+      'accept-encoding': 'br, gzip, deflate',
       'x-stainless-helper-method': 'stream'
     }
 
@@ -268,21 +268,13 @@ class ClaudeCodeHeadersService {
    * @param {string} model - 模型名称（用于动态设置 anthropic-beta）
    */
   getSpecialVendorHeaders(accessToken, model) {
-    // 根据模型动态获取正确的 beta header
-    const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
-    const betaHeader = model
-      ? claudeCodeRequestEnhancer.getBetaHeader(model)
-      : this.unifiedHeaders['anthropic-beta']
-
-    // 🔒 使用统一的请求头配置
+    // 🔒 使用统一的请求头配置，anthropic-beta 由客户端提供
     const headers = {
       ...this.unifiedHeaders,
       // 认证和内容类型需要动态设置
       Authorization: `Bearer ${accessToken}`,
       'content-type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      // 根据模型动态设置 beta header
-      'anthropic-beta': betaHeader
+      'anthropic-version': '2023-06-01'
     }
 
     return headers
@@ -309,32 +301,16 @@ class ClaudeCodeHeadersService {
         }
       }
 
-      // 🔒 统一返回固定的请求头配置
+      // 🔒 统一返回固定的请求头配置，anthropic-beta 由客户端提供
       const headers = { ...this.unifiedHeaders }
-
-      // 根据模型动态设置 anthropic-beta
-      if (model) {
-        const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
-        headers['anthropic-beta'] = claudeCodeRequestEnhancer.getBetaHeader(model)
-        logger.debug(`📋 Set anthropic-beta for model ${model}: ${headers['anthropic-beta']}`)
-      }
 
       logger.debug(`📋 Using unified Claude Code headers for account ${accountId}`)
 
       return headers
     } catch (error) {
       logger.error(`❌ Failed to get Claude Code headers for account ${accountId}:`, error)
-      // 🔒 出错时也返回统一配置
+      // 🔒 出错时也返回统一配置，anthropic-beta 由客户端提供
       const headers = { ...this.unifiedHeaders }
-      // 即使出错，也尝试根据模型设置 beta header
-      if (model) {
-        try {
-          const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
-          headers['anthropic-beta'] = claudeCodeRequestEnhancer.getBetaHeader(model)
-        } catch (e) {
-          logger.warn(`⚠️ Failed to set anthropic-beta for model ${model}`)
-        }
-      }
       return headers
     }
   }

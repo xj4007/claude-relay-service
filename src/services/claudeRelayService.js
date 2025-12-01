@@ -10,7 +10,6 @@ const sessionHelper = require('../utils/sessionHelper')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
-const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
 const redis = require('../models/redis')
 const ClaudeCodeValidator = require('../validators/clients/claudeCodeValidator')
 const { formatDateWithTimezone } = require('../utils/dateHelper')
@@ -881,14 +880,13 @@ class ClaudeRelayService {
 
       logger.info(`🔗 指纹是这个: ${options.headers['user-agent']}`)
 
-      // 使用增强器提供的动态 betaHeader（根据模型类型）
-      const dynamicBetaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
-      const betaHeader =
-        requestOptions?.betaHeader !== undefined
-          ? requestOptions.betaHeader
-          : dynamicBetaHeader || this.betaHeader
-      if (betaHeader) {
-        options.headers['anthropic-beta'] = betaHeader
+      // anthropic-beta 由客户端通过请求头提供
+      if (finalHeaders['anthropic-beta']) {
+        options.headers['anthropic-beta'] = finalHeaders['anthropic-beta']
+      } else if (requestOptions?.betaHeader) {
+        options.headers['anthropic-beta'] = requestOptions.betaHeader
+      } else if (this.betaHeader) {
+        options.headers['anthropic-beta'] = this.betaHeader
       }
 
       // 📤 记录发送到上游的请求信息（含 user_id）
@@ -1228,14 +1226,13 @@ class ClaudeRelayService {
       logger.info(
         `🔗 指纹是这个: ${options.headers['User-Agent'] || options.headers['user-agent']}`
       )
-      // 使用增强器提供的动态 betaHeader（根据模型类型）
-      const dynamicBetaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
-      const betaHeader =
-        requestOptions?.betaHeader !== undefined
-          ? requestOptions.betaHeader
-          : dynamicBetaHeader || this.betaHeader
-      if (betaHeader) {
-        options.headers['anthropic-beta'] = betaHeader
+      // anthropic-beta 由客户端通过请求头提供
+      if (finalHeaders['anthropic-beta']) {
+        options.headers['anthropic-beta'] = finalHeaders['anthropic-beta']
+      } else if (requestOptions?.betaHeader) {
+        options.headers['anthropic-beta'] = requestOptions.betaHeader
+      } else if (this.betaHeader) {
+        options.headers['anthropic-beta'] = this.betaHeader
       }
 
       // 📤 记录发送到上游的流式请求信息（含 user_id）

@@ -2151,7 +2151,6 @@
                 {{ loading ? '创建中...' : '创建' }}
               </button>
             </div>
-          
           </div>
         </div>
 
@@ -5457,6 +5456,7 @@ const handleApiKeyRefresh = async () => {
       await refresher()
       return
     } catch (error) {
+      // eslint-disable-next-line no-console
       console.error('刷新账户列表失败:', error)
     }
   }

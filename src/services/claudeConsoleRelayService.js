@@ -2,7 +2,6 @@ const axios = require('axios')
 const { v4: uuidv4 } = require('uuid')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const claudeCodeHeadersService = require('./claudeCodeHeadersService')
-const claudeCodeRequestEnhancer = require('./claudeCodeRequestEnhancer')
 const responseCacheService = require('./responseCacheService')
 const sessionHelper = require('../utils/sessionHelper')
 const { StreamTimeoutMonitor } = require('../utils/streamHelpers')
@@ -400,9 +399,7 @@ class ClaudeConsoleRelayService {
             modifiedRequestBody.model
           )
         } catch (error) {
-          // 如果方法失败，使用手动构建的请求头
-          const betaHeader = claudeCodeRequestEnhancer.getBetaHeader(modifiedRequestBody.model)
-
+          // 如果方法失败，使用手动构建的请求头，anthropic-beta 由客户端提供
           requestHeaders = {
             Authorization: `Bearer ${account.apiKey}`,
             'content-type': 'application/json',
@@ -410,9 +407,12 @@ class ClaudeConsoleRelayService {
             'User-Agent': userAgent,
             'x-app': 'cli',
             'anthropic-dangerous-direct-browser-access': 'true',
-            'anthropic-beta': betaHeader,
             Accept: 'application/json',
             Connection: 'keep-alive'
+          }
+          // 如果客户端提供了 anthropic-beta，使用它
+          if (filteredHeaders['anthropic-beta']) {
+            requestHeaders['anthropic-beta'] = filteredHeaders['anthropic-beta']
           }
           logger.warn(`⚠️ Fallback to manual headers: ${error.message}`)
         }
@@ -997,9 +997,7 @@ class ClaudeConsoleRelayService {
           body.model
         )
       } catch (error) {
-        // 如果方法失败，使用手动构建的请求头
-        const betaHeader = claudeCodeRequestEnhancer.getBetaHeader(body.model)
-
+        // 如果方法失败，使用手动构建的请求头，anthropic-beta 由客户端提供
         requestHeaders = {
           Authorization: `Bearer ${account.apiKey}`,
           'content-type': 'application/json',
@@ -1007,9 +1005,12 @@ class ClaudeConsoleRelayService {
           'User-Agent': userAgent,
           'x-app': 'cli',
           'anthropic-dangerous-direct-browser-access': 'true',
-          'anthropic-beta': betaHeader,
           Accept: 'application/json',
           Connection: 'keep-alive'
+        }
+        // 如果客户端提供了 anthropic-beta，使用它
+        if (filteredHeaders['anthropic-beta']) {
+          requestHeaders['anthropic-beta'] = filteredHeaders['anthropic-beta']
         }
         logger.warn(`⚠️ Fallback to manual stream headers: ${error.message}`)
       }
