@@ -21,7 +21,7 @@ class ContentModerationService {
 
     this.model = config.contentModeration?.model
     this.advancedModel =
-      config.contentModeration?.advancedModel || 'deepseek-ai/DeepSeek-V3.1-Terminus'
+      config.contentModeration?.advancedModel || 'zai-org/GLM-4.6'
     // 🚀 Pro模型配置（TPM更大，用于重试时的备选模型）
     this.proModel = config.contentModeration?.proModel || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp'
     this.enableSecondCheck = config.contentModeration?.enableSecondCheck !== false

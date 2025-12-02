@@ -223,7 +223,7 @@ const config = {
     })(),
     // 兼容旧配置：如果环境变量中有MODERATION_API_KEY，也保留为apiKey
     apiKey: process.env.MODERATION_API_KEY || '',
-    model: process.env.MODERATION_MODEL || 'MiniMaxAI/MiniMax-M2', // 默认模型（第一次审核，小模型）
+    model: process.env.MODERATION_MODEL || 'zai-org/GLM-4.6', // 默认模型（第一次审核，小模型）
     proModel: process.env.MODERATION_PRO_MODEL || 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，用于重试时的备选）
     advancedModel: process.env.MODERATION_ADVANCED_MODEL || 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（第二次审核，大模型）
     enableSecondCheck: process.env.MODERATION_ENABLE_SECOND_CHECK !== 'false', // 启用二次审核（默认true）

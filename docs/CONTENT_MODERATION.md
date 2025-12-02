@@ -37,8 +37,32 @@
 
 - **Key格式**: `moderation_session:{sessionId}`
 - **Value**: `1` (简单标记)
-- **TTL**: 1800秒 (30分钟)
+- **TTL**: 1800秒 (30分钟，可通过 `sessionCacheTTL` 配置)
 - **示例**: `moderation_session:17cf0fd3-d51b-4b59-977d-b899dafb3022`
+
+### Redis 查询命令
+
+```bash
+# 查看所有审核session缓存的key
+redis-cli KEYS "moderation_session:*"
+
+# 查看某个session是否已审核
+redis-cli EXISTS "moderation_session:17cf0fd3-d51b-4b59-977d-b899dafb3022"
+
+# 查看某个session的剩余TTL（秒）
+redis-cli TTL "moderation_session:17cf0fd3-d51b-4b59-977d-b899dafb3022"
+
+# 手动删除某个session的审核缓存（强制下次重新审核）
+redis-cli DEL "moderation_session:17cf0fd3-d51b-4b59-977d-b899dafb3022"
+
+# 批量删除所有审核session缓存（谨慎使用）
+redis-cli KEYS "moderation_session:*" | xargs redis-cli DEL
+
+# 统计当前缓存的session数量
+redis-cli KEYS "moderation_session:*" | wc -l
+```
+
+**注意**：如果Redis配置了密码，需要加上 `-a <password>` 参数。
 
 ## 🎯 智能内容提取
 
