@@ -248,13 +248,22 @@ const config = {
     circuitBreakerEnabled: process.env.MODERATION_CIRCUIT_BREAKER_ENABLED !== 'false', // 默认启用
     circuitBreakerDuration: parseInt(process.env.MODERATION_CIRCUIT_BREAKER_DURATION) || 300000, // 5分钟
     // 🚨 性能监控与降级（新增）
-    performanceMonitoringEnabled: true,     // 启用性能监控（默认true）
-    slowResponseThreshold: 8000,           // 慢响应阈值（毫秒，默认8秒）
-    maxConsecutiveFailures: 3,              // 连续失败次数阈值（默认3次）
-    degradationDuration: 300000            // 降级持续时间（毫秒，默认5分钟）
+    performanceMonitoringEnabled: true, // 启用性能监控（默认true）
+    slowResponseThreshold: 8000, // 慢响应阈值（毫秒，默认8秒）
+    maxConsecutiveFailures: 3, // 连续失败次数阈值（默认3次）
+    degradationDuration: 300000, // 降级持续时间（毫秒，默认5分钟）
+
+    // 🆕 Session级审核缓存配置（同一session在指定时间内只校验一次）
+    // 工作原理：提取sessionId后，检查Redis缓存中是否已通过审核
+    //         - 已缓存：直接放行，不调用审核API
+    //         - 未缓存：审核通过后缓存结果，TTL时间内不再重复校验
+    // 审核内容：用户输入前100字符 + 所有系统提示词前100字符
+    sessionCacheEnabled: process.env.MODERATION_SESSION_CACHE_ENABLED !== 'false', // 默认启用
+    sessionCacheTTL: parseInt(process.env.MODERATION_SESSION_CACHE_TTL) || 1800, // 缓存时效（秒），默认30分钟
+    sessionContentMaxLength: parseInt(process.env.MODERATION_SESSION_CONTENT_MAX_LENGTH) || 100 // 审核内容截取长度，默认100字符
   },
-  
-    // 🎯 智能缓存优化配置（自动检测相似请求并应用缓存折扣）
+
+  // 🎯 智能缓存优化配置（自动检测相似请求并应用缓存折扣）
   smartCacheOptimization: {
     // 是否启用智能缓存优化
     enabled: process.env.SMART_CACHE_ENABLED !== 'false', // 默认启用

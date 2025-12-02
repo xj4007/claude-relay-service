@@ -1,1115 +1,215 @@
-# 内容安全审核系统文档
+# 内容安全审核系统文档 v2.6.0
 
 ## 📋 概述
 
-内容审核系统是一个严格的NSFW（不安全内容）检测和拦截机制，用于保护服务免受不适当内容的影响。系统会在请求发送到Claude API之前，对**所有输入内容**进行审查。
+内容审核系统是一个NSFW（不安全内容）检测和拦截机制，用于保护服务免受不适当内容的影响。系统会在请求发送到Claude API之前，对输入内容进行审查。
 
-## 🚀 v2.5.0 重大更新（2025-11-02）
+**v2.6.0 核心特性**：
+- ✨ **Session级审核缓存**：同一session在30分钟内只校验一次
+- ✨ **智能内容提取**：用户输入+系统提示词各截取100字符
+- ✨ **宽松审核策略**：结合上下文判断，减少误判
 
-### 🎯 核心优化
-
-1. **智能内容提取**：优化审核内容提取策略，减少token消耗
-   - 每个消息片段截取前N字符（默认1000字符，可配置）
-   - 提取：最后用户输入 + 前一次assistant回复 + 倒数第二次用户输入
-   - **显著降低token使用量，提高审核效率**
-
-2. **简化审核流程**：从三级审核简化为二级审核
-   - Phase 1：默认模型初次审核
-   - Phase 2：违规时使用高级模型复核
-   - **更快的响应速度，更低的成本**
-
-3. **性能监控与降级**：全新的性能监控和自动降级机制
-   - 监控响应时间（默认10秒阈值）
-   - 追踪连续失败次数（默认3次阈值）
-   - 自动触发降级（默认5分钟内放行所有请求）
-   - **应对硅基流动API负载问题，避免误杀用户**
-
-4. **宽松审核策略**：优化系统提示词，更人性化的审核标准
-   - ✅ 允许情绪发泄（抱怨、轻度脏话）
-   - ✅ 允许技术上下文中的暴力隐喻（"杀死这个bug"）
-   - ✅ 任何技术上下文都放行
-   - ❌ 严格禁止纯NSFW内容（无技术上下文的色情请求）
-   - **减少误判，提升用户体验**
-
-## 🎯 核心功能
-
-### 1. 智能内容提取（v2.5.0新增）
-
-#### 审核范围
-
-- ✅ **最后一条 user 消息** + **倒数第一条 assistant 回复**（上下文审核）
-- ✅ 所有 **system 角色** 的系统提示词
-- ✅ 支持多轮对话上下文，避免编���讨论被误判
-- ✅ 支持多模态内容（文本、代码等）
-
-#### 审核覆盖场景
-
-| 场景       | 说明                                               |
-| ---------- | -------------------------------------------------- |
-| 单轮对话   | 审核用户输入（首次对话,无assistant上下文）         |
-| 多轮对话   | 审核**最后一条user消息 + 倒数第一条assistant回复** |
-| 编程上下文 | 通过assistant回复识别编程讨论,避免技术词汇被误判   |
-| 混合内容   | 同时审核 user+assistant 消息和 system 消息         |
-| 数组格式   | 支持 `[{type: "text", text: "..."}, ...]` 格式     |
-
-### 2. 严格的NSFW检测
-
-#### 禁止内容列表
-
-- 🚫 **性/成人内容**：色色、搞黄、涩涩、NSFW、裸体、性爱等
-- 🚫 **暴力内容**：恐怖、自伤、攻击等
-- 🚫 **违法内容**：毒品、武器、黑客等
-- 🚫 **仇恨言论**：歧视性内容
-- 🚫 **脏话/辱骂**：草泥马、操、傻逼等
-- 🚫 **政治攻击**：攻击性政治言论
-
-#### 允许的内容
-
-- ✅ 技术讨论（代码、API、架构、算法）
-- ✅ 学术资料和研究讨论
-- ✅ 编程教学和示例
-- ✅ 系统设计讨论
-
-### 3. 完整的违规追踪
-
-#### 日志记录的信息
-
-当检测到违规内容时，系统会记录以下完整信息：
-
-```javascript
-{
-  "timestamp": "2025-01-15T10:30:45.123Z",     // 违规时间
-  "apiKey": "user_app_key_001",                 // API Key名称
-  "keyId": "cr_xxxxx",                          // API Key ID
-  "userId": "user_12345",                       // 用户ID
-  "sensitiveWords": ["色色", "NSFW"],          // 检测到的违规词汇
-  "messageCount": 5,                            // 消息总数
-  "fullContent": "..."                          // 完整的输入内容
-}
-```
-
-#### 日志位置
-
-- 主日志：`logs/claude-relay-*.log`
-- 检索关键词：`🚨 NSFW Violation Detected`
-
-### 4. 故障处理策略
-
-系统支持两种故障处理策略，可根据实际情况选择：
-
-#### Fail-Close（故障关闭，默认策略）
-
-- ❌ 审核API调用失败 → **拒绝请求**
-- ❌ 审核服务异常 → **拒绝请求**
-- ✅ 内容通过审核 → **允许请求**
-- 🛡️ **适用场景**：生产环境，安全优先，可接受少量误杀
-
-#### Fail-Open（故障放行）
-
-- ⚠️ 审核API调用失败 → **放��请求**（避免误杀）
-- ⚠️ 审核服务异常 → **放行请求**（避免误杀）
-- ✅ 内容通过审核 → **允许请求**
-- 🎯 **适用场景**：审核服务不稳定时，用户体验优先，降低误杀率
-
-#### 重试机制
-
-- 📌 **模��级联重试**：
-  1. 先用默认模型重试 3 次
-  2. 如果失败，换成 Pro 模型重试 3 次（TPM更大）
-  3. 如果还失败，切换到下一个 API Key
-  4. 对新 Key 重复步骤 1-2
-- ⏳ 指数退避延迟：5s → 10s
-- 🔄 所有模型和 Key 都耗尽后，根据 `failStrategy` 决定是拒绝还是放行
-
-## 🔧 使用方式
-
-### 启用审核
-
-在 `config/config.js` 中配置：
-
-```javascript
-module.exports = {
-  // ... 其他配置
-
-  contentModeration: {
-    enabled: true, // 启用审核
-    apiBaseUrl: 'https://api.siliconflow.cn', // 硅基流动API地址
-
-    // 🔑 多API Key支持（推荐）：逗号分隔多个key，自动去除空格
-    apiKeys: ['sk-xxxxx', 'sk-yyyyy', 'sk-zzzzz'],
-    // 或者使用单个key（向后兼容）
-    apiKey: 'sk-xxxxx', // 单个审核API密钥（如果提供apiKeys则忽略）
-
-    // 三级审核模型配置
-    model: 'deepseek-ai/DeepSeek-V3.2-Exp', // 默认模型（快速检测）
-    proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大，重试时备选）
-    advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度）
-    enableSecondCheck: true, // 启用二次审核（默认true）
-
-    // API限制
-    maxTokens: 100, // 最大响应token数
-    timeout: 10000, // 超时时间（毫秒）
-
-    // ✂️ 内容截断配置（v2.3.0新增）
-    maxContentLength: 100, // 截取前100字符进行审核（减少token消耗和TPM压力）
-
-    // 重试配置
-    maxRetries: 3, // 单个模型最多重试次数
-    retryDelay: 5000, // 初始延迟（毫秒，会递增：5s, 10s）
-
-    // 故障策略：当所有API Key和模型都失败时的行为
-    // - 'fail-close'（默认，推荐）: 审核服务不可用时拒绝请求，确保安全但可能误杀正常用户
-    // - 'fail-open': 审核服务不可用时放行请求，避免误杀但安全性降低
-    failStrategy: 'fail-close'
-  }
-}
-```
-
-### 多API Key + 模型级联轮询机制
-
-当配置多个API Key时，系统会自动实现**智能轮询 + 模型级联重试**：
-
-1. **优先使用第一个Key + 默认模型**：所有请求首先尝试第一个Key的默认模型
-2. **模型级联重试**：如果默认模型连续失败3次，切换到Pro模型重试3次
-3. **自动切换到下一个Key**：如果Pro模型也失败3次，切换到第二个Key
-4. **新Key重复模型级联**：对新Key也执行默认模型→Pro模型的级联重试
-5. **轮询所有Key**：依次尝试所有配置的Key（每个Key都尝试2个模型）
-6. **失败后拒绝**：所有Key和模型都耗尽后才拒绝请求
-
-**适用场景**：
-
-- ✅ 应对硅基流动的RPM/TPM限流（Pro模型TPM更大）
-- ✅ 提高服务可用性和容错能力
-- ✅ 多账户负载分担
-- ✅ 自动降级到高TPM模型
-
-**示例日志**：
-
-```
-🔑 Using API Key 1/3: sk-abc...xyz
-📋 Key 1 - Trying Default Model (1/2): deepseek-ai/DeepSeek-V3.2-Exp
-🔄 Key 1 - Default Model - Attempt 1/3
-❌ Key 1 - Default Model - Attempt 3 threw error: rate limit exceeded
-🔄 Switching to Pro Model (higher TPM)...
-📋 Key 1 - Trying Pro Model (2/2): Pro/deepseek-ai/DeepSeek-V3.2-Exp
-🔄 Key 1 - Pro Model - Attempt 1/3
-✅ Moderation succeeded! Key 1, Pro Model, attempt 1
-```
-
-### 环境变量配置（可选）
-
-```bash
-# .env 文件
-CONTENT_MODERATION_ENABLED=true
-CONTENT_MODERATION_API_BASE_URL=https://api.siliconflow.cn
-
-# 🔑 多API Key配置（逗号分隔，推荐）
-MODERATION_API_KEY=sk-xxxxx,sk-yyyyy,sk-zzzzz
-# 或使用别名
-MODERATION_API_KEYS=sk-xxxxx,sk-yyyyy,sk-zzzzz
-
-# 三级审核模型配置
-MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp           # 默认模型
-MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp   # Pro模型（重试备选）
-MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct  # 高级模型
-MODERATION_ENABLE_SECOND_CHECK=true
-
-# API限制和重试
-CONTENT_MODERATION_MAX_TOKENS=100
-CONTENT_MODERATION_TIMEOUT=10000
-# ✂️ 内容截断配置：超过此长度的内容将被截断（减少token消耗和TPM压力）
-MODERATION_MAX_CONTENT_LENGTH=100
-CONTENT_MODERATION_MAX_RETRIES=3          # 单个模型重试次数
-CONTENT_MODERATION_RETRY_DELAY=1000
-CONTENT_MODERATION_FAIL_STRATEGY=fail-close
-```
-
-## ✂️ 内容截断优化（v2.3.0新增）
-
-### 功能说明
-
-为了减少 token 消耗和 TPM 压力，系统会自动截取用户输入内容的前 N 字符（默认 100）进行审核。
+## 🚀 Session级审核缓存
 
 ### 工作原理
 
-1. **自动截断**：
-   - 当用户输入长度超过 `maxContentLength` 时，只截取前 N 字符
-   - 适用于所有三级审核（Phase 1、Phase 2、Phase 3）
-   - 日志会记录截断操作：`✂️ Content truncated from 5000 to 1000 characters`
+1. **Session识别**：从请求中提取 `metadata.user_id` 中的会话UUID
+2. **缓存检查**：检查Redis中是否已有该session的审核记录
+3. **首次审核**：未缓存时，提取内容进行审核
+4. **缓存结果**：审核通过后缓存30分钟
 
-2. **性能提升**：
-   - 显著减少 API 调用的 token 数
-   - 降低 TPM 超限风险
-   - 提高审核速度
+### 数据流程
 
-3. **准确性保持**：
-   - 大多数违规内容出现在消息开头
-   - 100 字符足以快速检测违规关键词
-   - 如需更长，可调整 `MODERATION_MAX_CONTENT_LENGTH`
+```
+请求到达 → 提取sessionId → 检查Redis缓存
+                              ↓
+                    ┌─ 存在 → 直接放行 ✅
+                    │
+                    └─ 不存在 → 提取审核内容(用户100字+系统100字)
+                                        ↓
+                                   调用审核API (Phase 1 → Phase 2)
+                                        ↓
+                              ┌─ 通过 → 缓存结果(TTL=30分钟) → 放行 ✅
+                              └─ 违规 → 拒绝请求 ❌
+```
 
-### 配置示例
+### Redis Key 设计
+
+- **Key格式**: `moderation_session:{sessionId}`
+- **Value**: `1` (简单标记)
+- **TTL**: 1800秒 (30分钟)
+- **示例**: `moderation_session:17cf0fd3-d51b-4b59-977d-b899dafb3022`
+
+## 🎯 智能内容提取
+
+### 提取规则
+
+| 内容类型 | 提取方式 | 说明 |
+|---------|---------|------|
+| 用户输入 | 最后一条user消息前100字符 | 不足100字符则取全部 |
+| 系统提示词 | 每个先截取100字符，再合并 | 确保每个系统提示词都被检查 |
+
+### 审核内容格式
+
+**单个系统提示词：**
+```
+[System Context]: You are a coding assistant powered by Claude...
+
+[User Input]: 帮我写一个函数
+```
+
+**多个系统提示词（每个先截取100字符再合并）：**
+```
+[System Context]: You are a coding assistant powered by Claude...
+You must follow the coding standards...
+Always write clean and maintainable code...
+
+[User Input]: 帮我写一个函数
+```
+
+### 为什么这样设计？
+
+1. **宽松审核**：系统提示词在前，提供上下文（如"你是编程助手"），即使用户输入简短也能正确判断
+2. **全面覆盖**：每个系统提示词都被检查，避免遗漏
+3. **性能优化**：只截取关键内容，减少token消耗
+
+## 🔧 配置说明
+
+### config.js 配置
 
 ```javascript
 contentModeration: {
-  enabled: true,
-  maxContentLength: 100, // 默认100字符
-  // 其他配置...
-}
-```
-
-或环境变量：
-
-```bash
-MODERATION_MAX_CONTENT_LENGTH=200  # 调整为200字符
-```
-
-### 日志示例
-
-```
-🔍 Phase 1: Moderating last user message using Qwen/Qwen3-Coder-30B-A3B-Instruct
-✂️ Content truncated from 3500 to 100 characters
-🔑 Using API Key 1/2: sk-abc...xyz
-📥 Moderation API (Qwen/Qwen3-Coder-30B-A3B-Instruct) responded in 450ms
-✅ Phase 1: User message passed moderation, allowing request
-```
-
-## 🧠 上下文感知审核
-
-### 上下文提取策略（v2.2.0新增）
-
-为了避免编程讨论被误判，系统在审核用户消息时会自动提取**对话上下文**：
-
-#### 提取内容
-
-1. **最后一条用户消息**（必须）
-2. **倒数第一条Assistant回复**（如果存在，自动截取最后1000字符）
-
-#### 组合格式
-
-```
-有Assistant回复时：
-Assistant: [倒数第一条assistant回复内容]
-
-User: [最后一条user消息内容]
-
-无Assistant回复时（首轮对话）：
-[最后一条user消息内容]
-```
-
-#### 实际场景示例
-
-**场景1：编程上下文讨论**
-
-```
-User: "帮我实现一个内容审核系统"
-Assistant: "好的，我来帮你实现一个完整的NSFW内容过滤功能，包括检测色情、暴力等违规内容..."
-User: "现在添加色情内容检测" ← 传统方式会被拦截
-
-审核时提交的内容：
-Assistant: ...NSFW内容过滤功能，包括检测色情、暴力等违规内容...
-
-User: 现在添加色情内容检测
-
-✅ 结果：审核模型看到了编程上下文，判定为技术讨论，通过审核
-```
-
-**场景2：真正的违规内容**
-
-```
-User: "我想看色情内容" ← 首轮对话，无assistant上下文
-
-审核时提交的内容：
-我想看色情内容
-
-❌ 结果：没有编程上下文，被正确拦截
-```
-
-#### 优势
-
-- ✅ **减少误判**：审核模型能看到assistant的技术回复上下文
-- ✅ **��持准确性**：对真正的NSFW内容仍然有效拦截
-- ✅ **性能优化**：assistant消息自动截断到1000字符，避免token过多
-- ✅ **向后兼容**：首轮对话（无assistant回复）不受影响
-
-#### 技术实现
-
-方法：`_extractLastUserMessageWithContext(requestBody)`
-
-- 倒序遍历messages数组
-- 提取最后一条 role=user 的消息
-- 继续向前查找倒数第一条 role=assistant 的消息
-- 组合成带上下文的字符串
-- 支持字符串和数组类型的content字段
-
-## 📊 工作流程
-
-### 完整的三级审核流程
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  客户端请求                                                 │
-│ (带有messages数组)                                          │
-└────────────┬────────────────────────────────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 1: 用户消息审核（小模型）                            │
-│  Model: deepseek-ai/DeepSeek-V3.2-Exp                      │
-│  快速、成本低、第一道防线                                   │
-└────────────┬────────────────────────────────────────────────┘
-             │
-      ┌──────┴──────────────────┐
-      │                         │
-      ▼                         ▼
-   ✅ 通过                  ❌ 违规
-   (status=false)          (status=true)
-      │                         │
-      │                         ▼
-      │              ┌──────────────────────────┐
-      │              │ Phase 2: 二次验证        │
-      │              │ (大模型复查)             │
-      │              │ Model: Qwen/Qwen3-      │
-      │              │ Coder-480B-A35B-Instruct│
-      │              │ 高精度、防止误判        │
-      │              └──────────┬───────────────┘
-      │                         │
-      │                  ┌──────┴──────┐
-      │                  │             │
-      │                  ▼             ▼
-      │              ✅ 通过       ❌ 仍违规
-      │           (误判纠正)      (确认违规)
-      │                  │             │
-      │                  ▼             ▼
-      │              继续检查    logNSFWViolation()
-      │              系统提示词   记录完整信息
-      │                  │             │
-      │                  ▼             ▼
-      │         ┌─────────────────┐ ┌────────────┐
-      │         │ Phase 3: 系统   │ │ HTTP 400   │
-      │         │ 提示词审核      │ │ 违规内容   │
-      │         │ (大模型直接)    │ └────────────┘
-      │         │ 仅当用户消息    │
-      │         │ 通过但含NSFW词  │
-      │         └────────┬────────┘
-      │                  │
-      │           ┌──────┴──────┐
-      │           │             │
-      │           ▼             ▼
-      │        ✅ 通过      ❌ 违规
-      │           │             │
-      ▼           ▼             ▼
-   继续处理   继续处理    ┌────────────┐
-   请求       请求        │ HTTP 400   │
-                          │ 违规内容   │
-                          └────────────┘
-```
-
-### 三级审核详细说明
-
-#### 第一级：用户消息快速检测（小模型）
-
-- **模型**：`deepseek-ai/DeepSeek-V3.2-Exp`
-- **特点**：快速、成本低、适合第一道防线
-- **触发条件**：所有请求都会执行
-- **结果处理**：
-  - ✅ 通过（status=false, words=[]）→ 跳过系统提示词检查，直接放行
-  - ⚠️ 通过但含NSFW词（status=false, words=[...]）→ 继续检查系统提示词
-  - ❌ 违规（status=true）→ 触发第二级验证
-
-#### 第二级：大模型二次验证（防止误判）
-
-- **模型**：`Qwen/Qwen3-Coder-480B-A35B-Instruct`
-- **特点**：高精度、防止技术讨论被误拦截
-- **触发条件**：仅当第一级判定违规时执行
-- **目的**：确认是真正的违规还是误判
-- **结果处理**：
-  - ✅ 通过（status=false）→ 误判纠正，继续后续流程
-  - ❌ 仍违规（status=true）→ 确认违规，拒绝请求
-
-#### 第三级：系统提示词审核（高精度）
-
-- **模型**：`Qwen/Qwen3-Coder-480B-A35B-Instruct`（直接使用大模型）
-- **特点**：系统提示词只检查一次，使用最高精度模型
-- **触发条件**：仅当用户消息通过且不含NSFW词，或通过但含NSFW词时执行
-- **目的**：防止系统提示词中的隐藏恶意指令
-- **结果处理**：
-  - ✅ 通过（status=1）→ 所有审核通过，允许请求
-  - ❌ 违规（status=0）→ 拒绝请求
-
-### 成本优化策略
-
-| 场景                 | 调用次数 | 说明                                   |
-| -------------------- | -------- | -------------------------------------- |
-| 合法内容（无NSFW词） | 1次      | 仅小模型，跳过系统提示词检查           |
-| 合法内容（含NSFW词） | 2次      | 小模型 + 系统提示词大模型              |
-| 违规内容             | 2次      | 小模型 + 大模型验证                    |
-| 最坏情况             | 3次      | 小模型 + 大模型验证 + 系统提示词大模型 |
-
-**成本节省**：相比之前的并发双检查（每次2个API调用），现在平均成本降低50-80%
-
-## 🔍 审核API接口
-
-### 请求格式
-
-```javascript
-POST /v1/chat/completions
-
-{
-  "model": "qwen-7b-chat",
-  "messages": [
-    {
-      "role": "system",
-      "content": "You are a content safety moderator. ..."
-    },
-    {
-      "role": "user",
-      "content": "要审核的完整内容（所有消息合并）"
-    }
-  ],
-  "response_format": { "type": "json_object" },
-  "max_tokens": 100,
-  "top_p": 0.7
-}
-```
-
-### 响应格式
-
-**违规内容：**
-
-```json
-{
-  "status": "true",
-  "words": ["色色", "NSFW"]
-}
-```
-
-**安全内容：**
-
-```json
-{
-  "status": "false",
-  "words": []
-}
-```
-
-## 📝 错误响应
-
-### 内容违规
-
-```http
-HTTP/1.1 400 Bad Request
-Content-Type: application/json
-
-{
-  "error": {
-    "type": "content_moderation_error",
-    "message": "小红帽AI检测到违规词汇：[色色、NSFW]，禁止NSFW，多次输入违规内容将自动封禁。在终端可按ESC+ESC可返回上次输入进行修改。"
-  }
-}
-```
-
-### 审核服务不可用
-
-```http
-HTTP/1.1 400 Bad Request
-Content-Type: application/json
-
-{
-  "error": {
-    "type": "content_moderation_error",
-    "message": "小红帽AI内容审核服务暂不可用，请稍后重试。如问题持续，请联系管理员。"
-  }
-}
-```
-
-## 🔐 核心实现
-
-### 关键方法
-
-#### `moderateContent(requestBody, apiKeyInfo)`
-
-- **功能**：主审核入口
-- **参数**：
-  - `requestBody`：完整的Claude API请求体（包含messages）
-  - `apiKeyInfo`：API Key信息对象 `{keyName, keyId, userId}`
-- **返回**：`{passed: boolean, message?: string}`
-
-#### `_extractAllContent(requestBody)`
-
-- **功能**：从请求体中提取所有待审核内容
-- **处理**：
-  - 遍历所有消息
-  - 提取 user 和 system 角色的内容
-  - 支持字符串和数组格式
-  - 用双换行符（`\n\n`）分隔
-- **返回**：合并后的内容字符串
-
-#### `_logNSFWViolation(requestBody, sensitiveWords, apiKeyInfo)`
-
-- **功能**：记录NSFW违规信息
-- **记录项**：
-  - 时间戳
-  - API Key身份信息
-  - 违规词汇
-  - 消息计数
-  - 完整输入内容
-
-#### `_callModerationAPIWithRetry(userInput, modelOverride)`
-
-- **功能**：调用审核API并进行重试
-- **参数**：
-  - `userInput`：待审核的内容
-  - `modelOverride`：可选，覆盖默认模型（用于二次审核时切换到大模型）
-- **机制**：
-  - 最多3次尝试
-  - 指数退避延迟（1s, 2s, 3s）
-  - 所有失败则返回 `{success: false}`
-- **返回**：`{success: boolean, data: {status: string, words: array}}`
-
-#### `_callModerationAPI(userInput, model)`
-
-- **功能**：实际调用审核API
-- **参数**：
-  - `userInput`：待审核的内容
-  - `model`：使用的模型名称（支持动态切换）
-- **返回**：`{success: boolean, data: {status: string, words: array}}`
-
-#### `_callSystemModerationAPI(systemMessages)`
-
-- **功能**：审核系统提示词（直接使用大模型）
-- **特点**：
-  - 直接使用 `this.advancedModel`（高精度）
-  - 系统提示词只检查一次，无需二次验证
-  - 使用专门的系统提示词审核提示
-- **返回**：`{success: boolean, data: {status: number}}`（status: 1=安全, 0=违规）
-
-## 📈 监控和调试
-
-### 查看违规日志
-
-```bash
-# 搜索所有NSFW违规
-grep "🚨 NSFW Violation Detected" logs/claude-relay-*.log
-
-# 查看特定用户的违规记录
-grep "user_12345" logs/claude-relay-*.log | grep "NSFW"
-
-# 统计违规次数
-grep -c "🚨 NSFW Violation Detected" logs/claude-relay-*.log
-```
-
-### CLI检查状态
-
-```bash
-# 查看审核服务是否启用
-npm run cli status
-
-# 检查日志中的审核相关信息
-npm run service:logs | grep -E "moderation|NSFW"
-```
-
-### 日志字段说明
-
-| 字段           | 说明                 | 示例                       |
-| -------------- | -------------------- | -------------------------- |
-| timestamp      | ISO格式时间戳        | `2025-01-15T10:30:45.123Z` |
-| apiKey         | API Key名称          | `user_app_key_001`         |
-| keyId          | API Key ID           | `cr_xxxxx`                 |
-| userId         | 用户ID               | `user_12345`               |
-| sensitiveWords | 检测到的违规词汇数组 | `["色色", "NSFW"]`         |
-| messageCount   | 本次请求的消息总数   | `5`                        |
-| fullContent    | 完整的合并内容       | 所有user和system消息       |
-
-## ⚙️ 配置说明
-
-### 完整配置选项
-
-```javascript
-contentModeration: {
-  // 核心配置
-  enabled: true,                    // 是否启用审核（默认false）
-  apiBaseUrl: 'https://api.siliconflow.cn', // 审核API基础地址
-  apiKey: 'sk_xxxxx',              // 审核API认证密钥
-
-  // 二级审核模型配置（v2.5.0简化）
-  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 默认模型（快速检测）
-  proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp',    // Pro模型（TPM更大，重试备选）
-  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度复核）
-  enableSecondCheck: true,          // 启用二次审核（默认true）
-                                    // false时第一级违规直接拒绝，不进行大模型验证
-
-  // 🚨 性能监控与降级（v2.5.0新增）
-  performanceMonitoringEnabled: true,     // 启用性能监控（默认true）
-  slowResponseThreshold: 10000,           // 慢响应阈值（毫秒，默认10秒）
-  maxConsecutiveFailures: 3,              // 连续失败次数阈值（默认3次）
-  degradationDuration: 300000,            // 降级持续时间（毫秒，默认5分钟）
-                                          // 触发降级后，该时间内所有请求放行
-
-  // ✂️ 智能提取配置（v2.5.0新增）
-  maxContentLength: 1000,          // 每个消息片段截取的最大字符数（默认1000）
-                                   // 用于智能提取审核内容，减少token消耗
+  enabled: true,                              // 启用审核
+  apiBaseUrl: 'https://api.siliconflow.cn',   // 审核API地址
+  apiKeys: ['sk-xxxxx', 'sk-yyyyy'],          // 多API Key支持
+
+  // 审核模型配置
+  model: 'MiniMaxAI/MiniMax-M2',              // 默认模型（快速检测）
+  proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp', // Pro模型（TPM更大）
+  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（复核）
+  enableSecondCheck: true,                    // 启用二次审核
 
   // API限制
-  maxTokens: 100,                  // 审核API最大响应tokens
-  timeout: 10000,                  // 请求超时（毫秒，默认10s）
+  maxTokens: 100,
+  timeout: 10000,
 
-  // 重试策略
-  maxRetries: 3,                   // 单个模型最多重试次数（默认3）
-  retryDelay: 1000,                // 初始重试延迟（毫秒，默认1s）
-                                   // 实际延迟: 1s, 2s, 3s, ...
+  // 重试配置
+  maxRetries: 3,
+  retryDelay: 5000,
+  failStrategy: 'fail-close',                 // 失败时拒绝请求
 
-  // 故障策略
-  failStrategy: 'fail-close'       // 仅支持fail-close（严格模式）
-                                   // API失败或异常时拒绝请求
+  // 熔断机制
+  circuitBreakerEnabled: true,
+  circuitBreakerDuration: 300000,             // 5分钟
+
+  // 性能监控与降级
+  performanceMonitoringEnabled: true,
+  slowResponseThreshold: 8000,                // 8秒
+  maxConsecutiveFailures: 3,
+  degradationDuration: 300000,                // 5分钟
+
+  // 🆕 Session级审核缓存配置
+  sessionCacheEnabled: true,                  // 启用session级缓存（默认true）
+  sessionCacheTTL: 1800,                      // 缓存时效（秒），默认30分钟
+  sessionContentMaxLength: 100                // 审核内容截取长度，默认100字符
 }
 ```
 
-### 环境变量映射
+### 环境变量
 
 ```bash
 # 核心配置
 CONTENT_MODERATION_ENABLED=true
-CONTENT_MODERATION_API_BASE_URL=https://api.siliconflow.cn
-CONTENT_MODERATION_API_KEY=sk_xxxxx
+MODERATION_API_BASE_URL=https://api.siliconflow.cn
+MODERATION_API_KEY=sk-xxxxx,sk-yyyyy
 
-# 二级审核模型配置
-MODERATION_MODEL=deepseek-ai/DeepSeek-V3.2-Exp           # 默认模型
-MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp   # Pro模型（重试备选）
-MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct  # 高级模型
+# 模型配置
+MODERATION_MODEL=MiniMaxAI/MiniMax-M2
+MODERATION_PRO_MODEL=Pro/deepseek-ai/DeepSeek-V3.2-Exp
+MODERATION_ADVANCED_MODEL=Qwen/Qwen3-Coder-480B-A35B-Instruct
 MODERATION_ENABLE_SECOND_CHECK=true
 
-# 🚨 性能监控与降级（v2.5.0新增）
-MODERATION_PERFORMANCE_MONITORING_ENABLED=true
-MODERATION_SLOW_RESPONSE_THRESHOLD=10000      # 慢响应阈值（毫秒）
-MODERATION_MAX_CONSECUTIVE_FAILURES=3         # 连续失败阈值
-MODERATION_DEGRADATION_DURATION=300000        # 降级持续时间（毫秒）
-
-# ✂️ 智能提取配置（v2.5.0新增）
-MODERATION_MAX_CONTENT_LENGTH=1000            # 每个片段截取字符数
-
-# API限制
-CONTENT_MODERATION_MAX_TOKENS=100
-CONTENT_MODERATION_TIMEOUT=10000
-
-# 重试策略
-CONTENT_MODERATION_MAX_RETRIES=3   # 单个模型重试次数
-CONTENT_MODERATION_RETRY_DELAY=1000
-
-# 故障策略
-CONTENT_MODERATION_FAIL_STRATEGY=fail-close
+# Session级审核缓存
+MODERATION_SESSION_CACHE_ENABLED=true        # 启用session级缓存
+MODERATION_SESSION_CACHE_TTL=1800            # 缓存时效（秒）
+MODERATION_SESSION_CONTENT_MAX_LENGTH=100    # 内容截取长度
 ```
 
-## 🚀 最佳实践
+## 📊 审核流程
 
-### 1. 模型级联重试的最优配置
+### 二级审核机制
 
-```javascript
-// 推荐配置：成本、性能和精度的最佳平衡
-contentModeration: {
-  enabled: true,
-  apiBaseUrl: 'https://api.siliconflow.cn',
-  apiKey: 'sk_xxxxx',
-
-  // 模型级联配置
-  model: 'deepseek-ai/DeepSeek-V3.2-Exp',           // 默认模型（快速检测）
-  proModel: 'Pro/deepseek-ai/DeepSeek-V3.2-Exp',    // Pro模型（TPM更大，重试备选）
-  advancedModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', // 高级模型（高精度验证）
-  enableSecondCheck: true,          // 启用二次验证（防止误判）
-
-  // 性能配置
-  maxTokens: 100,
-  timeout: 10000,                   // 10秒超时
-  maxRetries: 3,                    // 每个模型重试3次
-  retryDelay: 1000,
-  failStrategy: 'fail-close'
-}
+```
+Session首次请求
+    ↓
+Phase 1: 默认模型快速检测
+    ↓
+  ┌─ 通过 (status=false) → 缓存结果 → 放行 ✅
+  │
+  └─ 违规 (status=true) → Phase 2: 高级模型复核
+                              ↓
+                    ┌─ 通过 → 误判纠正 → 缓存结果 → 放行 ✅
+                    └─ 仍违规 → 记录违规日志 → 拒绝请求 ❌
 ```
 
-**为什么选择Pro模型作为备选？**
+### 故障处理
 
-| 特性     | 默认模型 | Pro模型      | 说明                         |
-| -------- | -------- | ------------ | ---------------------------- |
-| TPM限制  | 较低     | **更高**     | Pro版TPM限制更大，适合高并发 |
-| 响应速度 | 快       | 快           | 两者速度相当                 |
-| 成本     | 低       | 稍高         | 仅在需要时使用Pro模型        |
-| 适用场景 | 常规请求 | **限流重试** | 默认模型限流时的最佳选择     |
+| 策略 | 说明 | 适用场景 |
+|------|------|---------|
+| fail-close（默认） | 审核失败时拒绝请求 | 生产环境，安全优先 |
+| fail-open | 审核失败时放行请求 | 审核服务不稳定时 |
 
-### 2. 监控模型级联重试的执行情况
+### 熔断与降级
 
-```bash
-# 查看默认模型的请求
-grep "Trying Default Model" logs/claude-relay-*.log
+- **熔断器**：检测到审核API故障后，自动停用审核5分钟
+- **性能降级**：连续3次慢响应或失败后，自动降级5分钟
 
-# 查看Pro模型的触发情况（说明默认模型遇到限流）
-grep "Trying Pro Model" logs/claude-relay-*.log
+## 📝 日志示例
 
-# 查看成功的审核及使用的模型
-grep "Moderation succeeded" logs/claude-relay-*.log
-
-# 统计各模型的使用次数
-grep -o "Default Model\|Pro Model" logs/claude-relay-*.log | sort | uniq -c
-
-# 查看API Key切换情况
-grep "Switching to next API Key" logs/claude-relay-*.log
-
-# 统计被拦截的请求
-grep "CONFIRMED violation after second check" logs/claude-relay-*.log | wc -l
-
-# 统计误判被纠正的情况
-grep "False positive corrected" logs/claude-relay-*.log | wc -l
 ```
+🆕 Session cache enabled: TTL=1800s (30min), content max length=100 chars
+🔍 Session 17cf0fd3... first check, performing moderation...
+📝 Session content extraction: user=85chars, system=200chars, total=300chars
+🔍 Session Phase 1: Moderating content with default model MiniMaxAI/MiniMax-M2
+✅ Session Phase 1: Content passed moderation, allowing request
+✅ Session 17cf0fd3... marked as moderated (TTL: 1800s)
 
-### 3. 成本优化建议
-
-| 场景         | 优化方案                                            |
-| ------------ | --------------------------------------------------- |
-| 高流量场景   | 保持三级审核，成本已优化到最低                      |
-| 低误报率需求 | 启用 `enableSecondCheck: true`（默认）              |
-| 极端成本控制 | 设置 `enableSecondCheck: false`（不推荐，误判率高） |
-| 高精度需求   | 所有模型都用大模型（成本高，不推荐）                |
-
-### 4. 处理技术讨论的误判
-
-当技术讨论被误拦截时：
-
-```bash
-# 查看被拦截的具体内容
-grep "CONFIRMED violation" logs/claude-relay-*.log | grep "算法\|检测\|过滤"
-
-# 分析误判模式
-grep "False positive corrected" logs/claude-relay-*.log | \
-  jq -r '.sensitiveWords' | sort | uniq -c | sort -rn
+# 后续同一session请求
+✅ Session 17cf0fd3... already moderated, skipping check
 ```
-
-**解决方案**：
-
-- ✅ 三级审核已内置防误判机制（第二级大模型验证）
-- ✅ 系统提示词直接用大模型（最高精度）
-- 📌 如果仍有误判，可调整审核API的系统提示词
-
-### 5. 性能监控
-
-```bash
-# 监控审核API的响应时间
-grep "Moderation API" logs/claude-relay-*.log | \
-  grep "responded in" | \
-  sed 's/.*responded in \([0-9]*\)ms.*/\1/' | \
-  awk '{sum+=$1; count++} END {print "平均响应时间: " sum/count "ms"}'
-
-# 监控重试情况
-grep "Moderation attempt" logs/claude-relay-*.log | \
-  grep -c "attempt 2\|attempt 3"
-
-# 监控超时情况
-grep "timeout" logs/claude-relay-*.log | wc -l
-```
-
-### 6. 定期审查违规日志
-
-```bash
-# 每日检查违规统计
-grep "🚨 NSFW Violation Detected" logs/claude-relay-$(date +%Y-%m-%d).log | wc -l
-
-# 识别频繁违规的用户
-grep "🚨 NSFW Violation Detected" logs/claude-relay-*.log | \
-  jq -r '.userId' | sort | uniq -c | sort -rn
-
-# 查看最常见的违规词汇
-grep "CONFIRMED violation" logs/claude-relay-*.log | \
-  jq -r '.sensitiveWords[]' | sort | uniq -c | sort -rn
-```
-
-## 🔗 相关文件
-
-- **主服务**：`src/services/contentModerationService.js`
-- **API路由**：`src/routes/api.js`（第109-130行）
-- **配置文件**：`config/config.js`
-- **日志输出**：`logs/claude-relay-*.log`
-- **日志工具**：`src/utils/logger.js`
 
 ## ❓ 常见问题
 
-### Q: 为什么技术讨论被拦截了？
+### Q: 为什么同一session只审核一次？
 
-A: 三级审核系统已内置防误判机制：
+A: 为了性能优化：
+- 减少审核API调用次数
+- 降低延迟
+- 节省成本
+- 30分钟后session过期，会重新审核
 
-1. ✅ 第一级（小模型）快速检测
-2. ✅ 第二级（大模型）自动验证，纠正误判
-3. ✅ 第三级（大模型）系统提示词高精度审核
+### Q: 如果用户在session内切换到违规内容怎么办？
 
-如果仍有误判，可以：
+A: 这是权衡的结果：
+- 30分钟内确实不会再次检测
+- 但大多数用户不会这样做
+- 如需更严格，可缩短 `sessionCacheTTL`
 
-- 检查日志中的 `False positive corrected` 来确认是否被纠正
-- 查看 `CONFIRMED violation` 来确认是真正的违规
-- 如果大模型仍误判，可调整审核API的系统提示词
+### Q: 没有sessionId时如何处理？
 
-### Q: 三级审核会不会太慢？
+A: 自动回退到原有逻辑：
+- 每次请求都进行审核
+- 日志会显示 `⚠️ No sessionId found, falling back to original moderation logic`
 
-A: 不会，成本已优化：
+### Q: 如何禁用session缓存？
 
-- **合法内容（无NSFW词）**：仅1次API调用（小模型）
-- **合法内容（含NSFW词）**：2次API调用（小模型 + 系统提示词大模型）
-- **违规内容**：2次API调用（小模型 + 大模型验证）
-- **平均响应时间**：2-5秒（取决于网络）
-
-### Q: 如何禁用二次验证？
-
-A: 在 `config/config.js` 中设置：
-
-```javascript
-contentModeration: {
-  enableSecondCheck: false // 禁用二次验证（不推荐���
-}
-```
-
-**警告**：禁用二次验证会导致技术讨论被误拦截的风险增加。
-
-### Q: 如何关闭审核？
-
-A: 在 `config/config.js` 中设置：
-
-```javascript
-contentModeration: {
-  enabled: false // 禁用审核
-}
-```
-
-### Q: 违规日志的 fullContent 太长怎么办？
-
-A: 日志文件会自动分割和压缩，您可以：
-
-- 使用日志系统的查询功能过滤
-- 定期归档旧日志
-- 检索时使用 grep 和 jq 工具过滤关键字段
-
-### Q: 能否针对特定用户不审核？
-
-A: 当前版本不支持白名单。可以在应用层面实现：
-
-1. 在中间件中对特定用户跳过审核
-2. 或者在审核之前检查用户权限级别
-
-### Q: 如何配置多个API Key？
-
-A: 支持两种配置方式：
-
-**方式1：环境变量（推荐）**
-
+A: 设置环境变量或配置：
 ```bash
-MODERATION_API_KEY=sk-xxxxx,sk-yyyyy,sk-zzzzz
-# 或使用别名
-MODERATION_API_KEYS=sk-xxxxx,sk-yyyyy,sk-zzzzz
+MODERATION_SESSION_CACHE_ENABLED=false
 ```
-
-**方式2：config.js**
-
-```javascript
-contentModeration: {
-  apiKeys: ['sk-xxxxx', 'sk-yyyyy', 'sk-zzzzz']
-}
-```
-
-系统会自动：
-
-- 去除空格和空值
-- 按顺序轮询
-- 记录每个Key的成功/失败次数
-
-### Q: 如何查看各个Key的使用情况？
-
-A: 查看日志中的统计信息：
-
-```bash
-# 查看Key使用成功次数
-grep "Key .* success:" logs/claude-relay-*.log
-
-# 查看Key使用失败次数
-grep "Key .* failure:" logs/claude-relay-*.log
-
-# 查看Key切换情况
-grep "Switching to next API Key" logs/claude-relay-*.log
-```
-
-### Q: 多个Key都失败了怎么办？
-
-A: 系统会：
-
-1. 尝试所有配置的Key
-2. 每个Key重试`maxRetries`次（默认3次）
-3. 所有Key都失败后返回fail-close错误
-4. 日志会记录总尝试次数：`Total attempts: Key数量 × maxRetries`
-
-**排查步骤**：
-
-1. 检查所有Key的额度和状态
-2. 查看是否所有Key都遇到限流
-3. 考虑增加Key数量或提升配额
-4. 检查网络连接和防火墙设置
-
-### Q: API Key信息为什么很重要？
-
-A: 它允许您：
-
-- 🔍 追踪是谁在请求NSFW内容
-- 📊 统计违规频率
-- 🛡️ 实施自动封禁机制
-- 📝 生成审核报告
-
-### Q: 第二级验证用的是什么模型？
-
-A: 默认使用 `Qwen/Qwen3-Coder-480B-A35B-Instruct`（大模型）：
-
-- 高精度，适合验证和纠正误判
-- 成本比小模型高，但仅在需要时调用
-- 可通过 `advancedModel` 配置修改
-
-### Q: 系统提示词为什么直接用大模型？
-
-A: 因为：
-
-1. 系统提示词只检查一次（不像用户消息可能多轮）
-2. 系统提示词的安全性至关重要
-3. 使用大模型确保最高精度，成本影响有限
-
-## 📞 故障排查
-
-### 审核服务总是超时
-
-1. ✅ 检查网络连接
-2. ✅ 验证 `apiBaseUrl` 是否正确
-3. ✅ 增加 `timeout` 值
-4. ✅ 检查审核API服务状态
-
-### 日志中大量"Moderation API failed"
-
-1. ✅ 检查 `apiKey` 是否有效
-2. ✅ 确认 API 配额未超
-3. ✅ 查看网络日志（启用 DEBUG_HTTP_TRAFFIC）
-4. ✅ 检查防火墙/代理设置
-
-### 无法找到违规日志
-
-1. ✅ 确认审核已启用（`enabled: true`）
-2. ✅ 搜索关键词：`🚨 NSFW`
-3. ✅ 检查日志文件路径：`logs/claude-relay-*.log`
-4. ✅ 确认日志级别包含 `warn`
 
 ---
 
-## 📋 版本历史
-
-### v2.5.0 (2025-11-02) - 性能监控与降级机制
-
-#### 🚀 重大更新
-
-- ✨ **智能内容提取**：优化审核内容提取策略，显著减少token消耗
-  - 每个消息片段截取前N字符（默认1000，可通过maxContentLength配置）
-  - 提取：最后用户输入 + 前一次assistant回复 + 倒数第二次用户输入
-  - 支持灵活配置截取长度，平衡审核准确度和token消耗
-  - 建议值：50-1000字符
-
-- ✨ **简化审核流程**：从三级审核简化为二级审核
-  - Phase 1：默认模型初次审核
-  - Phase 2：违规时使用高级模型复核
-  - 移除第二阶段的倒数两次消息合并审核
-  - 更快的响应速度，更低的成本
-
-- 🚨 **性能监控与自动降级**：全新的性能监控机制
-  - 监控响应时间（默认10秒阈值）
-  - 追踪连续失败次数（默认3次阈值）
-  - 自动触发降级（默认5分钟内放行所有请求）
-  - 应对硅基流动API负载问题，避免误杀合法用户
-
-- ✨ **宽松审核策略**：优化系统提示词，更人性化
-  - ✅ 允许情绪发泄（抱怨、轻度脏话）
-  - ✅ 允许技术上下文中的暴力隐喻（"杀死这个bug"）
-  - ✅ 任何技术上下文都放行
-  - ❌ 仅严格禁止纯NSFW内容（无技术上下文的色情请求）
-  - 显著减少误判率，提升用户体验
-
-#### 🔧 技术细节
-
-- 新增 `_extractSmartContent()` 方法：智能提取关键内容片段
-- 新增 `_isDegraded()` / `_triggerDegradation()` / `_resetDegradation()`：降级状态管理
-- 新增 `_recordPerformanceSuccess()` / `_recordPerformanceFailure()`：性能监控
-- 在 `_callModerationAPI()` 中集成性能监控逻辑
-- 优化 `systemPrompt`：更宽松的审核规则
-
-#### 📝 配置新增
-
-```javascript
-// 性能监控与降级
-performanceMonitoringEnabled: true,  // 启用性能监控
-slowResponseThreshold: 10000,        // 慢响应阈值（10秒）
-maxConsecutiveFailures: 3,           // 连续失败阈值
-degradationDuration: 300000,         // 降级持续时间（5分钟）
-
-// 智能提取
-maxContentLength: 1000,              // 每个片段截取字符数（默认1000）
-```
-
-### v2.4.0 (2025-10-28) - 优化审核策略避免TPM超限
-
-- ✨ **重要变更**：不再包含 assistant 回复，仅审核用户最后一次输入
-- 🚀 解决大 token 请求时即使使用 Pro 模型也超 TPM 的问题
-- ✅ 大幅减少审核请求的 token 数量，提升审核速度
-- ✅ 保持二次审核机制，通过大模型识别技术讨论，减少误判
-- 🔧 修改 `_extractLastUserMessageWithContext()` 方法，移除 assistant 回复提取逻辑
-- 📝 更新文档说明新的审核策略
-
-### v2.3.0 (2025-10-27) - 模型级联重试机制
-
-- ✨ 新增Pro模型配置（`proModel`），TPM限制更大
-- ✨ 实现模型级联重试机制：默认模型 → Pro模型 → 下一个API Key
-- ✨ 单个API Key支持多模型重试（默认模型3次 + Pro模型3次）
-- 🚀 提升限流场景下的成功率，自动降级到高TPM模型
-- 📊 优化日志输出，清晰显示当前使用的模型和重试进度
-- 🔧 应对硅基流动TPM限流问题（Pro模型限制更宽松）
-- 📝 完整的模型级联重试文档和最佳实践
-- 🔄 向后兼容：未配置proModel时自动回退到原有逻辑
-
-### v2.2.0 (2025-10-26) - 上下文感知审核
-
-- ✨ 新增上下文感知审核功能：自动提取最后一条user消息+倒数第一条assistant回复
-- ✨ 减少编程讨论被误判的情况
-- ✨ 审核模型能看到对话上下文,更准确判断技术词汇
-- ✨ Assistant消息自动截断到1000字符，优化token使用
-- ✅ 保持对真正NSFW内容的拦截能力
-- ✅ 向后兼容：首轮对话（无assistant回复）不受影响
-- 📝 完整的上下文审核文档和示例
-- 🔧 新增方法 `_extractLastUserMessageWithContext()`
-
-### v2.1.0 (2025-10-26) - 多API Key轮询支持
-
-- ✨ 支持配置多个审核API Key（逗号分隔）
-- ✨ 智能轮询机制：单Key失败后自动切换到下一个Key
-- ✨ 每个Key独立重试（默认3次），失败后切换
-- ✨ 完整的Key使用统计（成功/失败次数、最后使用时间）
-- ✨ Key脱敏显示（前6位+后4位），保护密钥安全
-- 🔧 应对硅基流动RPM/TPM限流问题
-- 🔧 提升服务可用性和容错能力
-- 📝 完整的多Key配置和故障排查文档
-- 📊 详细的轮询日志和统计信息
-
-### v2.0.0 (2025-10-24) - 三级审核系统
-
-- ✨ 实现三级审核机制（小模型 → 大模型验证 → 系统提示词审核）
-- ✨ 支持动态模型切换（`modelOverride` 参数）
-- ✨ 成本优化：平均成本降低50-80%
-- ✨ 防误判机制：第二级大模型自动纠正技术讨论误判
-- ✨ 系统提示词直接用大模型（最高精度）
-- 📝 完整的三级审核流程文档
-- 📝 成本优化策略说明
-- 📝 监控和调试指南
-
-### v1.0.0 (2025-01-15) - 初始版本
-
-- 基础的NSFW检测和拦截
-- 单模型审核
-- 完整的违规追踪和日志记录
-
----
-
-**最后更新**：2025-11-02
-**版本**：2.5.0
+**最后更新**：2025-12-01
+**版本**：2.6.0
 **维护者**：小红帽AI审核团队

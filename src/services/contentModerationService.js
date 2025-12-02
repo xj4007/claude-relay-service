@@ -1,6 +1,8 @@
 const axios = require('axios')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
+const redis = require('../models/redis')
+const sessionHelper = require('../utils/sessionHelper')
 
 class ContentModerationService {
   constructor() {
@@ -51,6 +53,11 @@ class ContentModerationService {
     this.isDegraded = false // 是否处于降级状态
     this.degradedAt = null // 降级开始时间
 
+    // 🆕 Session级审核缓存配置：同一session在指定时间内只校验一次
+    this.sessionCacheEnabled = config.contentModeration?.sessionCacheEnabled !== false // 默认启用
+    this.sessionCacheTTL = config.contentModeration?.sessionCacheTTL || 30 * 60 // 30分钟（秒）
+    this.sessionContentMaxLength = config.contentModeration?.sessionContentMaxLength || 100 // 截取100字符
+
     // 📊 记录每个Key的使用情况
     this.keyStats = this.apiKeys.map((key, index) => ({
       index,
@@ -75,6 +82,11 @@ class ContentModerationService {
       if (this.performanceMonitoringEnabled) {
         logger.info(
           `🚨 Performance monitoring enabled: slow threshold=${this.slowResponseThreshold}ms, max failures=${this.maxConsecutiveFailures}, degradation=${this.degradationDuration / 1000}s`
+        )
+      }
+      if (this.sessionCacheEnabled) {
+        logger.info(
+          `🆕 Session cache enabled: TTL=${this.sessionCacheTTL}s (${this.sessionCacheTTL / 60}min), content max length=${this.sessionContentMaxLength} chars`
         )
       }
     }
@@ -135,6 +147,45 @@ When in doubt → ALLOW (better false negative than false positive).`
         `🚨 Performance degradation ACTIVE, bypassing moderation (${Math.ceil(remainingTime / 1000)}s remaining, failures: ${this.consecutiveFailures})`
       )
       return { passed: true }
+    }
+
+    // 🆕 Session级缓存检查：同一session在30分钟内只校验一次
+    if (this.sessionCacheEnabled) {
+      const sessionId = sessionHelper.extractSessionUUID(requestBody)
+      if (sessionId) {
+        const isModerated = await this._isSessionModerated(sessionId)
+        if (isModerated) {
+          logger.info(
+            `✅ Session ${sessionId.substring(0, 8)}... already moderated, skipping check`
+          )
+          return { passed: true }
+        }
+
+        // 需要进行审核，使用session内容提取方式（用户输入+系统提示词各100字符）
+        logger.info(
+          `🔍 Session ${sessionId.substring(0, 8)}... first check, performing moderation...`
+        )
+
+        // 提取session审核内容
+        const sessionContent = this._extractSessionContent(requestBody)
+
+        if (!sessionContent || sessionContent.trim().length === 0) {
+          logger.warn('⚠️ No session content found for moderation')
+          return { passed: true }
+        }
+
+        // 调用审核API
+        const result = await this._performSessionModeration(sessionContent, apiKeyInfo, requestBody)
+
+        // 如果通过，缓存结果
+        if (result.passed) {
+          await this._markSessionModerated(sessionId)
+        }
+
+        return result
+      }
+      // 如果没有sessionId，走原有逻辑
+      logger.info(`⚠️ No sessionId found, falling back to original moderation logic`)
     }
 
     try {
@@ -469,6 +520,262 @@ When in doubt → ALLOW (better false negative than false positive).`
       `✂️ Content truncated from ${content.length} to ${this.maxContentLength} characters`
     )
     return truncated
+  }
+
+  /**
+   * 🆕 获取Session审核缓存的Redis key
+   * @param {string} sessionId - 会话UUID
+   * @returns {string} Redis key
+   */
+  _getSessionModerationKey(sessionId) {
+    return `moderation_session:${sessionId}`
+  }
+
+  /**
+   * 🆕 检查Session是否已通过审核
+   * @param {string} sessionId - 会话UUID
+   * @returns {Promise<boolean>}
+   */
+  async _isSessionModerated(sessionId) {
+    if (!sessionId) return false
+    try {
+      const client = redis.getClientSafe()
+      const exists = await client.exists(this._getSessionModerationKey(sessionId))
+      return exists === 1
+    } catch (error) {
+      logger.warn(`⚠️ Failed to check session moderation cache: ${error.message}`)
+      return false
+    }
+  }
+
+  /**
+   * 🆕 记录Session已通过审核
+   * @param {string} sessionId - 会话UUID
+   * @returns {Promise<void>}
+   */
+  async _markSessionModerated(sessionId) {
+    if (!sessionId) return
+    try {
+      const client = redis.getClientSafe()
+      const key = this._getSessionModerationKey(sessionId)
+      await client.setex(key, this.sessionCacheTTL, '1')
+      logger.info(
+        `✅ Session ${sessionId.substring(0, 8)}... marked as moderated (TTL: ${this.sessionCacheTTL}s)`
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Failed to cache session moderation: ${error.message}`)
+    }
+  }
+
+  /**
+   * 🆕 提取Session审核内容（用户输入前100字符 + 所有系统提示词前100字符）
+   * 重要：将两者组合发送给审核API，让审核模型能看到完整上下文来判断
+   *
+   * @param {Object} requestBody - Claude API 请求体
+   * @returns {string} 组合后的审核内容
+   */
+  _extractSessionContent(requestBody) {
+    const maxLen = this.sessionContentMaxLength || 100
+    let userContent = ''
+    let systemContent = ''
+
+    // 1. 提取用户输入（不超过maxLen字符，不足则取全部）
+    if (requestBody.messages && Array.isArray(requestBody.messages)) {
+      for (let i = requestBody.messages.length - 1; i >= 0; i--) {
+        const message = requestBody.messages[i]
+        if (message.role === 'user') {
+          if (typeof message.content === 'string') {
+            userContent = message.content.substring(0, maxLen)
+          } else if (Array.isArray(message.content)) {
+            const textContents = message.content
+              .filter((item) => item.type === 'text')
+              .map((item) => item.text)
+              .join('\n')
+            userContent = textContents.substring(0, maxLen)
+          }
+          break
+        }
+      }
+    }
+
+    // 2. 提取所有系统提示词（每个先截取maxLen字符，再合并）
+    // 这样可以确保每个系统提示词都被检查到，避免只检查合并后的前100字符
+    const systemParts = []
+
+    // 2.1 从 requestBody.system 提取（可能是字符串或数组）
+    const system = requestBody.system
+    if (system) {
+      if (typeof system === 'string') {
+        // 截取前maxLen字符
+        systemParts.push(system.substring(0, maxLen))
+      } else if (Array.isArray(system)) {
+        // 每个part先截取再添加
+        for (const part of system) {
+          const text = part.text || ''
+          if (text) {
+            systemParts.push(text.substring(0, maxLen))
+          }
+        }
+      }
+    }
+
+    // 2.2 从 messages 中提取 role=system 的消息（可能存在多个）
+    if (requestBody.messages && Array.isArray(requestBody.messages)) {
+      for (const message of requestBody.messages) {
+        if (message.role === 'system') {
+          if (typeof message.content === 'string') {
+            // 每个系统消息先截取再添加
+            systemParts.push(message.content.substring(0, maxLen))
+          } else if (Array.isArray(message.content)) {
+            const textContents = message.content
+              .filter((item) => item.type === 'text')
+              .map((item) => item.text)
+              .join('\n')
+            // 截取后添加
+            systemParts.push(textContents.substring(0, maxLen))
+          }
+        }
+      }
+    }
+
+    // 合并所有截取后的系统提示词
+    systemContent = systemParts.join('\n')
+
+    // 3. 组合内容（系统提示词在前，提供上下文）
+    // 审核模型可以看到系统提示词（如"你是编程助手"）来判断用户输入是否合理
+    const parts = []
+    if (systemContent) parts.push(`[System Context]: ${systemContent}`)
+    if (userContent) parts.push(`[User Input]: ${userContent}`)
+
+    const combined = parts.join('\n\n')
+    logger.info(
+      `📝 Session content extraction: user=${userContent.length}chars, system=${systemContent.length}chars, total=${combined.length}chars`
+    )
+    return combined
+  }
+
+  /**
+   * 🆕 执行Session级内容审核（Phase 1 → Phase 2）
+   * @param {string} contentToModerate - 待审核内容
+   * @param {Object} apiKeyInfo - API Key信息
+   * @param {Object} requestBody - 原始请求体（用于违规日志记录）
+   * @returns {Promise<{passed: boolean, message?: string}>}
+   */
+  async _performSessionModeration(contentToModerate, apiKeyInfo, requestBody) {
+    try {
+      logger.info(`🔍 Session Phase 1: Moderating content with default model ${this.model}`)
+
+      // ========== 第一阶段：默认模型初次审核 ==========
+      const firstResult = await this._callModerationAPIWithRetry(contentToModerate, null)
+
+      // 情况1：API调用失败
+      if (!firstResult.success) {
+        if (this.failStrategy === 'fail-open') {
+          logger.warn(
+            '⚠️ Session Phase 1 moderation API failed, but using FAIL-OPEN strategy, ALLOWING request'
+          )
+          return { passed: true }
+        } else {
+          logger.error(
+            '❌ Session Phase 1 moderation API failed, using FAIL-CLOSE strategy, BLOCKING request'
+          )
+          return {
+            passed: false,
+            message:
+              '小红帽AI内容审核服务暂不可用，请稍后重试。如问题持续，请联系管理员。\n提示：在 Claude Code 中按 ESC+ESC 可返回上次输入。'
+          }
+        }
+      }
+
+      // 情况2：第一次通过 - 直接放行
+      if (firstResult.data.status === 'false') {
+        logger.info('✅ Session Phase 1: Content passed moderation, allowing request')
+        return { passed: true }
+      }
+
+      // 情况3：第一次判定违规 → 使用高级模型复核
+      if (firstResult.data.status === 'true') {
+        logger.warn(
+          `⚠️ Session Phase 1: Content flagged by default model, using advanced model ${this.advancedModel} for verification...`
+        )
+        logger.warn(`   Flagged words: [${firstResult.data.sensitiveWords.join(', ')}]`)
+
+        if (!this.enableSecondCheck) {
+          logger.error('❌ Second check disabled, BLOCKING request directly')
+          this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
+          return {
+            passed: false,
+            message: this._formatErrorMessage(firstResult.data.sensitiveWords)
+          }
+        }
+
+        // ========== 第二阶段：高级模型复核 ==========
+        logger.info(`🔍 Session Phase 2: Verification with advanced model ${this.advancedModel}`)
+
+        const secondResult = await this._callModerationAPIWithRetry(
+          contentToModerate,
+          this.advancedModel
+        )
+
+        if (!secondResult.success) {
+          if (this.failStrategy === 'fail-open') {
+            logger.warn(
+              '⚠️ Session Phase 2 (advanced model) failed, but using FAIL-OPEN strategy, ALLOWING request'
+            )
+            return { passed: true }
+          } else {
+            logger.error(
+              '❌ Session Phase 2 (advanced model) failed, applying FAIL-CLOSE policy, BLOCKING request'
+            )
+            this._logNSFWViolation(requestBody, firstResult.data.sensitiveWords, apiKeyInfo)
+            return {
+              passed: false,
+              message: this._formatErrorMessage(firstResult.data.sensitiveWords)
+            }
+          }
+        }
+
+        // 高级模型通过 → 误判纠正，放行
+        if (secondResult.data.status === 'false') {
+          logger.info(
+            `✅ Session Phase 2: Advanced model ${this.advancedModel} passed (false positive corrected), allowing request`
+          )
+          return { passed: true }
+        }
+
+        // 高级模型仍然违规 → 确认违规，拒绝请求
+        logger.error(
+          `🚫 Session Phase 2: CONFIRMED violation by advanced model ${this.advancedModel}, words: [${secondResult.data.sensitiveWords.join(', ')}]`
+        )
+        this._logNSFWViolation(requestBody, secondResult.data.sensitiveWords, apiKeyInfo)
+        return {
+          passed: false,
+          message: this._formatErrorMessage(secondResult.data.sensitiveWords)
+        }
+      }
+
+      // 所有审核通过
+      logger.info('✅ Session content moderation passed')
+      return { passed: true }
+    } catch (error) {
+      logger.error('❌ Session content moderation error:', error)
+      this._tripCircuitBreaker()
+
+      if (this.failStrategy === 'fail-open') {
+        logger.warn(
+          '⚠️ Exception in session moderation, but using FAIL-OPEN strategy, ALLOWING request'
+        )
+        return { passed: true }
+      } else {
+        logger.error(
+          '❌ Exception in session moderation, using FAIL-CLOSE strategy, BLOCKING request'
+        )
+        return {
+          passed: false,
+          message: '小红帽AI内容审核服务异常，请稍后重试。如问题持续，请联系管理员。'
+        }
+      }
+    }
   }
 
   /**
